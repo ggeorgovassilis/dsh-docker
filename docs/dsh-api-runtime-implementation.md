@@ -1,7 +1,7 @@
 # DSH API Runtime — Proposal
 
 **Status:** proposal — resolve the blocking questions in [Open questions](#open-questions) before implementing.  
-**Target:** the standalone repository `ggeorgovassilis/dsh-docker` (not a fork of `deepseek-harness-docker`).  
+**Target:** the standalone repository `ggeorgovassilis/dsh-docker`.  
 **Goal:** a Docker image that runs DeepSeek Harness as an unauthenticated HTTP API (JSON-RPC over HTTP plus SSE events), with Prometheus metrics, configured entirely from `.env` and operated via `docker exec`, and a one-command DSH update flow.
 
 [Acceptance criteria](#acceptance-criteria) is the completion contract.
@@ -820,11 +820,3 @@ Still open:
 4. Is POST + SSE acceptable, or must browser clients use WebSocket?
 5. Should the workspace be a host bind mount or a named volume?
 6. Which network/CIDR may reach the unauthenticated API, and who owns the reverse proxy or network policy?
-
----
-
-## Reference points
-
-Useful examples in the existing `deepseek-harness-docker` repository (do not copy wholesale): its `Dockerfile`, `compose.yaml`, `scripts/smoke.sh`, and `scripts/check-version-consistency.sh`.
-
-Do **not** carry over the Web/desktop, Chromium, noVNC, Browser Use, market, Super Agent, or third-party browser plugin parts. They are unrelated to this service.

@@ -1,8 +1,11 @@
 # DSH in Docker
 
-This project does one thing: it packages [DeepSeek Harness](https://www.npmjs.com/package/@deepseek-ai/dsh) (DSH) into a Docker container and exposes it as an HTTP API.
+This project packages [DeepSeek Harness](https://www.npmjs.com/package/@deepseek-ai/dsh) (DSH) into a Docker container and exposes its two official interfaces:
 
-It does not add features, change DSH's behaviour, or provide any kind of interface beyond the API.
+- **The JSON-RPC API** — for scripts and other programs.
+- **The web UI** — DSH's built-in browser interface (and clients like JaboDSH).
+
+It runs the official `@deepseek-ai/dsh` package unchanged; it does not add features or modify DSH's behaviour.
 
 ## Why
 
@@ -11,11 +14,6 @@ DSH is normally run directly on your machine. Running it inside a container inst
 - **Isolates** DSH and the files it works with from your host system.
 - **Limits the damage** if DSH, or the code it runs, misbehaves. The container runs as an unprivileged user, with a read-only filesystem and no access to your host.
 - **Keeps your setup clean** — no Node.js, no npm packages, and no dependencies installed on the host.
-
-## What it is not
-
-- There is **no web interface**. This is API-only.
-- There is **no authentication** (by design — see [Security](#security)).
 
 ## Requirements
 
@@ -41,7 +39,10 @@ scripts/build.sh
 scripts/run.sh -d
 ```
 
-When it is running, the API is at `http://127.0.0.1:3080`.
+When it is running:
+
+- API: `http://127.0.0.1:3080`
+- Web UI: `http://127.0.0.1:8080` (see [Using the web UI](#using-the-web-ui))
 
 ## Configuration
 
@@ -56,10 +57,42 @@ Everything else has a sensible default. The settings you are most likely to chan
 
 | Setting | Default | What it is |
 |---|---|---|
-| `HTTP_PORT` | `3080` | The port the API listens on. |
-| `BIND_ADDRESS` | `127.0.0.1` | Which host address the API is reachable on. Keep it on loopback unless you know what you are doing. |
+| `HTTP_PORT` | `3080` | The port the JSON-RPC API is reachable on. |
+| `WEB_PORT` | `8080` | The port the web UI is reachable on. |
+| `BIND_ADDRESS` | `127.0.0.1` | Which host address the container is reachable on. Keep it on loopback unless you know what you are doing. |
 | `DSH_MODEL` | `deepseek-v4-flash` | The model DSH uses. |
 | `MEMORY_LIMIT` / `CPU_LIMIT` | `2g` / `2` | How much memory and CPU the container may use. |
+| `PROJECTS_PATH` | empty | A folder of projects to mount at the same absolute path inside the container. See [Working on your own projects](#working-on-your-own-projects). |
+
+## Working on your own projects
+
+DSH's web UI organises work into **workspaces**, and every workspace is a
+folder. One DSH container can host as many workspaces as you like, so you do
+not need one container per project.
+
+Point `PROJECTS_PATH` at the folder that contains your projects:
+
+```dotenv
+PROJECTS_PATH=/home/you/workspace
+```
+
+The folder is mounted into the container at **the same absolute path**. That
+matters: a workspace DSH records as `/home/you/workspace/my-app` is also
+`/home/you/workspace/my-app` on your host, so the same paths work in both
+places, including in clients that send host paths to DSH.
+
+Then create a workspace in the web UI (or open one) at any folder under that
+path, for example `/home/you/workspace/my-app`. `DSH_CWD` only sets the
+default directory for new sessions; it does not limit which workspaces you
+can use.
+
+Notes:
+
+- Leave `PROJECTS_PATH` empty to skip the extra mount.
+- The container runs as UID 1000. If your files belong to another user, the
+  agent cannot write to them; use a folder owned by UID 1000 (or change the
+  `--user` value in `scripts/run.sh`).
+- The mount is read/write: that is what lets DSH edit your code.
 
 ## Using the API
 
@@ -96,6 +129,33 @@ A few useful endpoints:
 | `GET /healthz` | Is the container alive? |
 | `GET /readyz` | Is DSH ready to take requests? |
 
+## Using the web UI
+
+The web UI is protected by a launch token. Find it in the logs:
+
+```bash
+docker logs dsh | grep 'dsh web:'
+# dsh web: http://127.0.0.1:8081/?token=abc123…
+```
+
+Then open the web UI with that token:
+
+```
+http://127.0.0.1:8080/?token=abc123…
+```
+
+(The address shown in the logs is DSH's internal loopback address; use your
+own `WEB_PORT` instead.) The token changes every time the container starts.
+
+### Connecting JaboDSH (VS Code)
+
+JaboDSH is a VS Code client for DSH. To connect it:
+
+1. In JaboDSH, set the connection mode to `custom` and the server URL to
+   `http://127.0.0.1:8080` (or your `WEB_PORT`).
+2. Run **Authorize External Connection** and paste the launch token from the
+   `dsh web:` log line.
+
 ## Managing the container
 
 ```bash
@@ -104,8 +164,7 @@ scripts/run.sh -d      # start it again
 docker logs -f dsh     # read its logs
 ```
 
-The container is always named `dsh`. (Docker itself stores names with a
-leading slash, so `docker inspect -f '{{.Name}}'` shows `/dsh`; that is normal.)
+The container is always named `dsh`.
 
 ## Updating DSH
 
@@ -122,12 +181,13 @@ To roll back, keep the previous image around and re-run it with the previous
 
 ## Security
 
-> **This API has no authentication.** Anyone who can reach it can run DSH
-> (which can execute commands in the workspace) and spend your API credits.
+> **The JSON-RPC API has no authentication.** Anyone who can reach it can run
+> DSH (which can execute commands in the workspace) and spend your API credits.
 
-The default `BIND_ADDRESS=127.0.0.1` keeps it reachable only from your own
-machine. If you expose it beyond that, put it behind a firewall or an
-authenticating proxy first.
+The web UI is protected by its launch token, but it is still a full management
+surface (file browsing, terminal, approvals). The default `BIND_ADDRESS=127.0.0.1`
+keeps both reachable only from your own machine. If you expose them beyond that,
+put them behind a firewall or an authenticating proxy first.
 
 ## Where DSH keeps its data
 
@@ -135,7 +195,7 @@ Two folders matter:
 
 - `WORKSPACE_HOST` — the folder DSH works in (mounted from your host).
 - A Docker volume (`DSH_HOME_VOLUME`, default `dsh-api-home`) — DSH's own
-  state, kept between restarts.
+  state, kept between restarts. The web UI and the API share it.
 
 `scripts/stop.sh` removes the container; it never deletes your workspace
 folder or the DSH home volume.

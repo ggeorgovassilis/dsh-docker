@@ -18,17 +18,27 @@ load_env() {
 
   : "${IMAGE_REPOSITORY:=dsh-api-runtime}"
   : "${HTTP_PORT:=3080}"
+  : "${WEB_PORT:=8080}"
   : "${BIND_ADDRESS:=127.0.0.1}"
   : "${DSH_HOME_VOLUME:=dsh-api-home}"
   : "${WORKSPACE:=/workspace}"
   : "${DSH_CWD:=/workspace}"
   : "${MEMORY_LIMIT:=2g}"
   : "${CPU_LIMIT:=2}"
+  : "${PROJECTS_PATH:=}"
 
   : "${DEEPSEEK_API_KEY:?DEEPSEEK_API_KEY is required}"
   : "${WORKSPACE_HOST:?WORKSPACE_HOST is required}"
   [ "$DEEPSEEK_API_KEY" != replace-me ] || die "set DEEPSEEK_API_KEY in .env"
   [ -d "$WORKSPACE_HOST" ] || die "WORKSPACE_HOST does not exist: $WORKSPACE_HOST"
+
+  if [ -n "$PROJECTS_PATH" ]; then
+    case "$PROJECTS_PATH" in
+      /*) ;;
+      *) die "PROJECTS_PATH must be an absolute path: $PROJECTS_PATH" ;;
+    esac
+    [ -d "$PROJECTS_PATH" ] || die "PROJECTS_PATH does not exist: $PROJECTS_PATH"
+  fi
 }
 
 dsh_version() {

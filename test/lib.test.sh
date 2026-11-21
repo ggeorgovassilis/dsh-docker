@@ -50,5 +50,14 @@ expect_fails "requires a credential" "DEEPSEEK_API_KEY=" 'load_env'
 expect_fails "rejects the placeholder credential" "DEEPSEEK_API_KEY=replace-me" 'load_env'
 expect_fails "requires an existing workspace" "WORKSPACE_HOST=/nope/nope" 'load_env'
 
+expect "leaves PROJECTS_PATH empty by default" "" \
+  'load_env; [ -z "$PROJECTS_PATH" ]'
+
+expect "accepts an existing absolute PROJECTS_PATH" "PROJECTS_PATH=$tmp" \
+  'load_env; [ "$PROJECTS_PATH" = "$PWD" ] || [ -d "$PROJECTS_PATH" ]'
+
+expect_fails "rejects a relative PROJECTS_PATH" "PROJECTS_PATH=relative/dir" 'load_env'
+expect_fails "rejects a missing PROJECTS_PATH" "PROJECTS_PATH=/nope/nope" 'load_env'
+
 printf '%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" = 0 ]

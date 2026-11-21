@@ -54,7 +54,11 @@ ENV HOME=/home/node \
     NARB_DISABLE_NATIVE_CACHE=1 \
     DSH_CONTAINER=1 \
     HTTP_BIND=0.0.0.0 \
-    HTTP_PORT=3080
+    HTTP_PORT=3080 \
+    WEB_BIND=0.0.0.0 \
+    WEB_PORT=8080 \
+    WEB_INTERNAL_HOST=127.0.0.1 \
+    WEB_INTERNAL_PORT=8081
 
 # Chown only the writable directories. node_modules is world-readable and the
 # bridge never writes to /app; a recursive chown of /app is needlessly slow.
@@ -63,7 +67,7 @@ RUN mkdir -p /home/node/.dsh /workspace \
 
 USER node
 WORKDIR /workspace
-EXPOSE 3080
+EXPOSE 3080 8080
 
 ARG DSH_VERSION
 ARG IMAGE_VERSION=dev
@@ -77,4 +81,4 @@ LABEL org.opencontainers.image.title="DSH API Runtime" \
 HEALTHCHECK --interval=30s --timeout=3s --start-period=20s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:'+(process.env.HTTP_PORT||3080)+'/readyz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
 
-ENTRYPOINT ["/usr/bin/tini", "--", "node", "/app/bridge/server.mjs"]
+ENTRYPOINT ["/usr/bin/tini", "--", "node", "/app/bridge/supervisor.mjs"]

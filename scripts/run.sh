@@ -21,6 +21,17 @@ else
   mode=(--rm)
 fi
 
+mounts=(
+  --volume "$DSH_HOME_VOLUME:/home/node/.dsh"
+  --volume "$WORKSPACE_HOST:$WORKSPACE"
+)
+
+# Mount your projects at the same absolute path inside the container, so a
+# path DSH records (a workspace, a session cwd) is valid on the host too.
+if [ -n "$PROJECTS_PATH" ]; then
+  mounts+=(--volume "$PROJECTS_PATH:$PROJECTS_PATH")
+fi
+
 # Replace a container left behind by a previous run.
 docker rm --force dsh >/dev/null 2>&1 || true
 
@@ -30,11 +41,15 @@ docker run "${mode[@]}" --name dsh \
   --pids-limit 512 --user 1000:1000 --stop-timeout 30 \
   --memory "$MEMORY_LIMIT" --cpus "$CPU_LIMIT" \
   --publish "${BIND_ADDRESS}:${HTTP_PORT}:3080" \
+  --publish "${BIND_ADDRESS}:${WEB_PORT}:8080" \
   --env-file .env \
-  --volume "$DSH_HOME_VOLUME:/home/node/.dsh" \
-  --volume "$WORKSPACE_HOST:$WORKSPACE" \
+  "${mounts[@]}" \
   "$(image)"
 
 echo
-echo "API: http://${BIND_ADDRESS}:${HTTP_PORT}  (no authentication)"
+echo "API:     http://${BIND_ADDRESS}:${HTTP_PORT}  (no authentication)"
+echo "Web UI:  http://${BIND_ADDRESS}:${WEB_PORT}   (launch token in 'docker logs dsh')"
+if [ -n "$PROJECTS_PATH" ]; then
+  echo "Projects: $PROJECTS_PATH (same path inside the container)"
+fi
 echo "Logs: docker logs dsh"
