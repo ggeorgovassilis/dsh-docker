@@ -39,10 +39,11 @@ scripts/build.sh
 scripts/run.sh -d
 ```
 
-When it is running:
+When it is running (reachable from other machines too, because
+`BIND_ADDRESS` defaults to `0.0.0.0`):
 
-- API: `http://127.0.0.1:3080`
-- Web UI: `http://127.0.0.1:8080` (see [Using the web UI](#using-the-web-ui))
+- API: `http://<this-host>:3080`
+- Web UI: `http://<this-host>:8080` (see [Using the web UI](#using-the-web-ui))
 
 ## Configuration
 
@@ -59,7 +60,7 @@ Everything else has a sensible default. The settings you are most likely to chan
 |---|---|---|
 | `HTTP_PORT` | `3080` | The port the JSON-RPC API is reachable on. |
 | `WEB_PORT` | `8080` | The port the web UI is reachable on. |
-| `BIND_ADDRESS` | `127.0.0.1` | Which host address the container is reachable on. Keep it on loopback unless you know what you are doing. |
+| `BIND_ADDRESS` | `0.0.0.0` | Which host address the container is reachable on. `0.0.0.0` publishes on every interface; use `127.0.0.1` to keep it local. |
 | `DSH_MODEL` | `deepseek-v4-flash` | The model DSH uses. |
 | `MEMORY_LIMIT` / `CPU_LIMIT` | `2g` / `2` | How much memory and CPU the container may use. |
 | `PROJECTS_PATH` | empty | A folder of projects to mount at the same absolute path inside the container. See [Working on your own projects](#working-on-your-own-projects). |
@@ -185,9 +186,12 @@ To roll back, keep the previous image around and re-run it with the previous
 > DSH (which can execute commands in the workspace) and spend your API credits.
 
 The web UI is protected by its launch token, but it is still a full management
-surface (file browsing, terminal, approvals). The default `BIND_ADDRESS=127.0.0.1`
-keeps both reachable only from your own machine. If you expose them beyond that,
-put them behind a firewall or an authenticating proxy first.
+surface (file browsing, terminal, approvals).
+
+`BIND_ADDRESS=0.0.0.0` publishes both on every host interface, so any machine
+that can reach this host can use them. If that is not what you want, set
+`BIND_ADDRESS=127.0.0.1` in `.env`; otherwise put the host behind a firewall
+or an authenticating reverse proxy.
 
 ## Where DSH keeps its data
 

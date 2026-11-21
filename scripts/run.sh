@@ -41,14 +41,21 @@ docker run "${mode[@]}" --name dsh \
   --pids-limit 512 --user 1000:1000 --stop-timeout 30 \
   --memory "$MEMORY_LIMIT" --cpus "$CPU_LIMIT" \
   --publish "${BIND_ADDRESS}:${HTTP_PORT}:3080" \
-  --publish "${BIND_ADDRESS}:${WEB_PORT}:8080" \
+  --publish "${BIND_ADDRESS}:${WEB_PORT}:${WEB_PORT}" \
   --env-file .env \
   "${mounts[@]}" \
   "$(image)"
 
+# 0.0.0.0 is not a browsable address; show one the host actually has.
+host="$BIND_ADDRESS"
+if [ "$host" = 0.0.0.0 ]; then
+  host="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  host="${host:-127.0.0.1}"
+fi
+
 echo
-echo "API:     http://${BIND_ADDRESS}:${HTTP_PORT}  (no authentication)"
-echo "Web UI:  http://${BIND_ADDRESS}:${WEB_PORT}   (launch token in 'docker logs dsh')"
+echo "API:     http://${host}:${HTTP_PORT}  (no authentication)"
+echo "Web UI:  http://${host}:${WEB_PORT}   (launch token in 'docker logs dsh')"
 if [ -n "$PROJECTS_PATH" ]; then
   echo "Projects: $PROJECTS_PATH (same path inside the container)"
 fi
