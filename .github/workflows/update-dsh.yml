@@ -1,0 +1,57 @@
+name: update-dsh
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: npm dist-tag or exact version
+        required: false
+        default: next
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Prepare a CI .env
+        run: |
+          cp .env.example .env
+          mkdir -p .workspace
+          sed -i 's|^DEEPSEEK_API_KEY=.*|DEEPSEEK_API_KEY=ci-placeholder|' .env
+          sed -i "s|^WORKSPACE_HOST=.*|WORKSPACE_HOST=$PWD/.workspace|" .env
+          chmod 600 .env
+
+      - name: Update, build, and smoke test
+        run: scripts/update-dsh.sh "${{ inputs.channel || 'next' }}"
+
+      - name: Open a pull request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if git diff --quiet -- package.json package-lock.json; then
+            echo "no dependency changes"
+            exit 0
+          fi
+
+          version="$(sed -n 's/.*"@deepseek-ai\/dsh": *"\([^"]*\)".*/\1/p' package.json | head -n 1)"
+          branch="dsh-update-${version}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "${branch}"
+          git add package.json package-lock.json
+          git commit -m "chore(dsh): update @deepseek-ai/dsh to ${version}"
+          git push --set-upstream origin "${branch}"
+
+          gh pr create \
+            --title "chore(dsh): update to ${version}" \
+            --body "Updates the pinned @deepseek-ai/dsh to ${version}, regenerates package-lock.json, builds the image, and passes the fake-DSH smoke test. Review the upstream changelog before merging; run the live smoke test if credentials are available." \
+            --base main \
+            --head "${branch}"

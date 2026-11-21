@@ -1,0 +1,2 @@
+# Dependency lockfile: required for `npm ci`, but noisy in review diffs.
+package-lock.json linguist-generated=true

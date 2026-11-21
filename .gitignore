@@ -1,0 +1,13 @@
+# Secrets: never commit the operator environment.
+.env
+.env.*
+!.env.example
+
+# Dependencies are installed inside disposable containers only.
+node_modules/
+
+# Local artifacts
+*.log
+test/.tmp/
+.dsh-home/
+.workspace/

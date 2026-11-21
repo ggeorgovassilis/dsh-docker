@@ -1,0 +1,20 @@
+{
+  "name": "dsh-api-runtime",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Unauthenticated HTTP/JSON-RPC gateway for the DeepSeek Harness SDK runtime",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node bridge/server.mjs",
+    "test": "node --test test/",
+    "test:unit": "node --test test/bridge.test.mjs"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh": "0.2.2-rc.3",
+    "@prometheus-io/client": "0.16.1"
+  }
+}

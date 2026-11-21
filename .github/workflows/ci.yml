@@ -1,0 +1,73 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Shell tests for the .env parser
+        run: bash test/lib.test.sh
+
+      - name: Node unit and fake-DSH integration tests
+        run: |
+          docker run --rm \
+            --volume "$PWD:/src:ro" \
+            --workdir /tmp/work \
+            node:24-trixie \
+            sh -c 'mkdir -p /tmp/work && cp -a /src/. /tmp/work/ && cd /tmp/work &&
+                   npm ci --ignore-scripts --no-audit --no-fund &&
+                   node --test test/bridge.test.mjs'
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Prepare a CI .env
+        run: |
+          cp .env.example .env
+          mkdir -p .workspace
+          sed -i 's|^DEEPSEEK_API_KEY=.*|DEEPSEEK_API_KEY=ci-placeholder|' .env
+          sed -i "s|^WORKSPACE_HOST=.*|WORKSPACE_HOST=$PWD/.workspace|" .env
+          chmod 600 .env
+
+      - name: Build
+        run: scripts/build.sh
+
+      - name: Verify
+        run: scripts/verify.sh
+
+      - name: Fake-DSH smoke test
+        run: scripts/smoke.sh
+
+      - name: Resolve image reference
+        id: image
+        run: |
+          source scripts/lib.sh
+          load_eng
+          echo "ref=$(image_name)" >> "$GITHUB_OUTPUT"
+
+      - name: Trivy image scan
+        uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # v0.33.1
+        with:
+          image-ref: ${{ steps.image.outputs.ref }}
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "0"
+
+      - name: Shellcheck
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck
+          shellcheck scripts/*.sh
