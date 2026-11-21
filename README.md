@@ -41,7 +41,7 @@ scripts/build.sh
 scripts/run.sh -d
 ```
 
-When it is running, the API is at `http://127.0.0.1:8080`.
+When it is running, the API is at `http://127.0.0.1:3080`.
 
 ## Configuration
 
@@ -56,7 +56,7 @@ Everything else has a sensible default. The settings you are most likely to chan
 
 | Setting | Default | What it is |
 |---|---|---|
-| `HTTP_PORT` | `8080` | The port the API listens on. |
+| `HTTP_PORT` | `3080` | The port the API listens on. |
 | `BIND_ADDRESS` | `127.0.0.1` | Which host address the API is reachable on. Keep it on loopback unless you know what you are doing. |
 | `CONTAINER_NAME` | `dsh-api` | The container name. A leading `/` is stripped, because Docker's own tools render every name as `/name`. |
 | `DSH_MODEL` | `deepseek-v4-flash` | The model DSH uses. |
@@ -67,7 +67,7 @@ Everything else has a sensible default. The settings you are most likely to chan
 The API accepts JSON-RPC requests. Send a prompt with `curl`:
 
 ```bash
-curl -sS http://127.0.0.1:8080/v1/rpc \
+curl -sS http://127.0.0.1:3080/v1/rpc \
   -H 'content-type: application/json' \
   -d '{
     "jsonrpc": "2.0",
@@ -84,7 +84,7 @@ This returns an acknowledgement immediately. The model's answer is delivered
 afterwards, as a stream of events. Watch them with:
 
 ```bash
-curl -N http://127.0.0.1:8080/v1/events
+curl -N http://127.0.0.1:3080/v1/events
 ```
 
 A few useful endpoints:

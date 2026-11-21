@@ -41,7 +41,7 @@ trap cleanup EXIT INT TERM
 
 port_of() {
   local container="$1"
-  docker port "${container}" 8080/tcp | head -n 1 | sed 's/.*://'
+  docker port "${container}" 3080/tcp | head -n 1 | sed 's/.*://'
 }
 
 wait_ready() {
@@ -92,7 +92,7 @@ docker run --detach \
   --security-opt no-new-privileges:true \
   --pids-limit 256 \
   --user 1000:1000 \
-  --publish 127.0.0.1::8080 \
+  --publish 127.0.0.1::3080 \
   --env HTTP_BIND=0.0.0.0 \
   --env DSH_BIN=/test/fake-dsh.mjs \
   --env DSH_PROVIDER=deepseek-official \
@@ -158,7 +158,7 @@ docker run --detach \
   --security-opt no-new-privileges:true \
   --pids-limit 512 \
   --user 1000:1000 \
-  --publish 127.0.0.1::8080 \
+  --publish 127.0.0.1::3080 \
   --env HTTP_BIND=0.0.0.0 \
   --env-file "${env_file}" \
   --volume "${live_volume}:/home/node/.dsh" \

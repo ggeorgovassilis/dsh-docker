@@ -60,7 +60,7 @@ export function loadConfig(env = process.env) {
   if (httpBind === '') throw new ConfigError('HTTP_BIND must not be empty');
 
   // Port 0 asks the OS for an ephemeral port; tests use it.
-  const httpPort = readInt(env, 'HTTP_PORT', 8080, { min: 0, max: 65535 });
+  const httpPort = readInt(env, 'HTTP_PORT', 3080, { min: 0, max: 65535 });
 
   const dshBin = readString(env, 'DSH_BIN', path.join(APP_ROOT, 'node_modules', '.bin', 'dsh'));
   if (dshBin === '') throw new ConfigError('DSH_BIN must not be empty');

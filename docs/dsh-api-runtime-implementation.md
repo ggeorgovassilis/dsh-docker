@@ -84,7 +84,7 @@ flowchart LR
   home[("DSH home volume")] --- dsh
 ```
 
-One HTTP listener on `HTTP_PORT` (default `8080`) serves `/v1/rpc`, `/v1/events`, `/v1/status`, `/healthz`, `/readyz`, and `/metrics`.
+One HTTP listener on `HTTP_PORT` (default `3080`) serves `/v1/rpc`, `/v1/events`, `/v1/status`, `/healthz`, `/readyz`, and `/metrics`.
 
 ---
 
@@ -152,7 +152,7 @@ RUNTIME_IMAGE_DIGEST=
 # Runtime
 CONTAINER_NAME=dsh-api
 BIND_ADDRESS=127.0.0.1
-HTTP_PORT=8080
+HTTP_PORT=3080
 ALLOW_UNAUTHENTICATED_EXPOSURE=0
 DSH_HOME_VOLUME=dsh-api-home
 WORKSPACE_HOST=/srv/dsh-workspace
@@ -258,7 +258,7 @@ ENV HOME=/home/node \
     NARB_DISABLE_NATIVE_CACHE=1 \
     DSH_CONTAINER=1 \
     HTTP_BIND=0.0.0.0 \
-    HTTP_PORT=8080
+    HTTP_PORT=3080
 
 # Chown only the writable directories. node_modules stays world-readable and
 # the bridge never writes to /app, so a recursive chown of /app is avoided.
@@ -267,7 +267,7 @@ RUN mkdir -p /home/node/.dsh /workspace \
 
 USER node
 WORKDIR /workspace
-EXPOSE 8080
+EXPOSE 3080
 
 ARG DSH_VERSION
 ARG IMAGE_VERSION=dev
@@ -278,7 +278,7 @@ LABEL org.opencontainers.image.title="DSH API Runtime" \
       io.example.dsh.version="${DSH_VERSION}"
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=20s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:'+(process.env.HTTP_PORT||8080)+'/readyz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.HTTP_PORT||3080)+'/readyz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
 
 ENTRYPOINT ["/usr/bin/tini", "--", "node", "/app/bridge/server.mjs"]
 ```
@@ -455,7 +455,7 @@ Error mapping:
 Example:
 
 ```bash
-curl -sS http://127.0.0.1:8080/v1/rpc \
+curl -sS http://127.0.0.1:3080/v1/rpc \
   -H 'content-type: application/json' \
   -d '{
     "jsonrpc": "2.0",
@@ -481,7 +481,7 @@ It does **not** return the model's final answer. Clients must consume `/v1/event
 Wait for the session to become idle:
 
 ```bash
-curl -sS http://127.0.0.1:8080/v1/rpc \
+curl -sS http://127.0.0.1:3080/v1/rpc \
   -H 'content-type: application/json' \
   -d '{"jsonrpc":"2.0","id":2,"method":"session/wait","params":{"sessionId":"demo"}}'
 ```
@@ -491,7 +491,7 @@ curl -sS http://127.0.0.1:8080/v1/rpc \
 Server-Sent Events stream:
 
 ```bash
-curl -N http://127.0.0.1:8080/v1/events
+curl -N http://127.0.0.1:3080/v1/events
 ```
 
 ```text
@@ -631,7 +631,7 @@ The scripts are thin wrappers over Docker; behavior is specified here rather tha
 - Build if the image is missing, unless `--no-build`.
 - Create the DSH home volume if missing.
 - Generate the filtered runtime env file.
-- Run the container with the flags from [Runtime security](#runtime-security), mapping `HTTP_PORT` to container port `8080`, mounting the two volumes, and passing the filtered env file.
+- Run the container with the flags from [Runtime security](#runtime-security), mapping `HTTP_PORT` to container port `3080`, mounting the two volumes, and passing the filtered env file.
 - Default: foreground plus `--rm`, so `Ctrl-C` stops and removes it.
 - `-d`: detached with `--restart unless-stopped` **and without `--rm`** (`docker run` rejects combining them).
 - Add `--memory`/`--cpus` limits appropriate for the host.

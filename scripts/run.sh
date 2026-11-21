@@ -69,7 +69,7 @@ args=(
   --stop-timeout 30
   --memory "${MEMORY_LIMIT}"
   --cpus "${CPU_LIMIT}"
-  --publish "${publish_host}:${HTTP_PORT}:8080"
+  --publish "${publish_host}:${HTTP_PORT}:3080"
   --env HTTP_BIND=0.0.0.0
   --env-file "${env_file}"
   --volume "${DSH_HOME_VOLUME}:/home/node/.dsh"

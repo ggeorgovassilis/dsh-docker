@@ -128,7 +128,7 @@ make_valid_env() {
   cat >"${tmp}/valid.env" <<EOF
 CONTAINER_NAME=dsh-api-test
 BIND_ADDRESS=127.0.0.1
-HTTP_PORT=8080
+HTTP_PORT=3080
 NODE_IMAGE=node:24-trixie
 RUNTIME_IMAGE=node:24-trixie-slim
 DSH_HOME_VOLUME=dsh-api-test-home
