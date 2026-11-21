@@ -149,6 +149,16 @@ load_eng() {
   : "${CPU_LIMIT:=2}"
   : "${DEEPSEEK_BASE_URL:=}"
   : "${RUN_LIVE_SMOKE:=0}"
+
+  # Docker's API renders container names as "/name" (docker inspect -f
+  # '{{.Name}}' always shows the slash). Accept a "/"-prefixed value but keep
+  # the bare name so every script and message agrees with `docker ps`.
+  if [[ -n "${CONTAINER_NAME:-}" ]]; then
+    while [[ "${CONTAINER_NAME}" == /* ]]; do
+      CONTAINER_NAME="${CONTAINER_NAME#/}"
+    done
+    export CONTAINER_NAME
+  fi
 }
 
 validate_config() {
@@ -161,6 +171,9 @@ validate_config() {
 
   [[ "${HTTP_PORT}" =~ ^[0-9]+$ ]] || die ".env: HTTP_PORT must be numeric"
   (( HTTP_PORT >= 1 && HTTP_PORT <= 65535 )) || die ".env: HTTP_PORT must be between 1 and 65535"
+
+  [[ "${CONTAINER_NAME}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] \
+    || die ".env: CONTAINER_NAME must start with a letter or digit and contain only letters, digits, '_', '.' or '-'"
 
   if [[ -n "${IMAGE_TAG}" ]]; then
     [[ "${IMAGE_TAG}" != *'+'* ]] || die ".env: IMAGE_TAG must not contain build metadata ('+')"

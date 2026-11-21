@@ -146,6 +146,27 @@ make_valid_env
 expect_ok "accepts a valid configuration" \
   with_lib "${tmp}/valid.env" 'load_eng; validate_config'
 
+# Docker's API renders names as "/name"; the parser must keep the bare name.
+sed 's|^CONTAINER_NAME=.*|CONTAINER_NAME=/dsh-api-test|' \
+  "${tmp}/valid.env" >"${tmp}/slashed-name.env"
+chmod 600 "${tmp}/slashed-name.env"
+expect_ok "strips a leading slash from CONTAINER_NAME" with_lib "${tmp}/slashed-name.env" '
+  load_eng
+  [[ "${CONTAINER_NAME}" == "dsh-api-test" ]]
+  validate_config'
+
+sed 's|^CONTAINER_NAME=.*|CONTAINER_NAME=/|' \
+  "${tmp}/valid.env" >"${tmp}/empty-name.env"
+chmod 600 "${tmp}/empty-name.env"
+expect_fail "rejects a CONTAINER_NAME that is only slashes" with_lib "${tmp}/empty-name.env" '
+  load_eng; validate_config'
+
+sed 's|^CONTAINER_NAME=.*|CONTAINER_NAME=bad name|' \
+  "${tmp}/valid.env" >"${tmp}/invalid-name.env"
+chmod 600 "${tmp}/invalid-name.env"
+expect_fail "rejects an invalid CONTAINER_NAME" with_lib "${tmp}/invalid-name.env" '
+  load_eng; validate_config'
+
 expect_fail "rejects a non-loopback bind without opt-in" with_lib "${tmp}/valid.env" '
   load_eng; BIND_ADDRESS=0.0.0.0; validate_config'
 
