@@ -1,15 +1,18 @@
 #!/usr/bin/env node
 /**
- * Deterministic stand-in for `dsh --profile sdk`.
+ * Deterministic stand-in for the `dsh` binary.
  *
- * It speaks the same newline-delimited JSON-RPC protocol for the subset the
- * bridge uses, so CI can exercise the bridge without model credentials.
+ * With `web` it serves a trivial HTTP endpoint on WEB_INTERNAL_HOST:PORT, like
+ * `dsh web` does. Otherwise it speaks the newline-delimited JSON-RPC protocol
+ * for the subset the SDK bridge uses, so CI can exercise the bridge without
+ * model credentials.
  * Behaviour knobs (environment):
  *   FAKE_DSH_VERSION          version printed by `--version`
  *   FAKE_DSH_INIT_ERROR=1     answer `initialize` with a JSON-RPC error
  *   FAKE_DSH_EXIT_AFTER_INIT=1 exit shortly after answering `initialize`
  */
 
+import http from 'node:http';
 import readline from 'node:readline';
 
 const VERSION = process.env.FAKE_DSH_VERSION ?? '0.0.0-test';
@@ -18,6 +21,19 @@ if (process.argv.includes('--version')) {
   process.stdout.write(`${VERSION}\n`);
   process.exit(0);
 }
+
+if (process.argv.includes('web')) {
+  const host = process.env.WEB_INTERNAL_HOST || '127.0.0.1';
+  const port = Number(process.env.WEB_INTERNAL_PORT || 8081);
+  const server = http.createServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'text/plain' });
+    res.end('fake dsh web\n');
+  });
+  server.listen(port, host, () => process.stderr.write(`[fake-dsh] web on ${host}:${port}\n`));
+  const stop = () => server.close(() => process.exit(0));
+  process.on('SIGTERM', stop);
+  process.on('SIGINT', stop);
+} else {
 
 const write = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
 const log = (message) => process.stderr.write(`[fake-dsh] ${message}\n`);
@@ -181,3 +197,4 @@ lines.on('line', (line) => {
 lines.on('close', () => process.exit(0));
 process.on('SIGTERM', () => process.exit(0));
 process.on('SIGINT', () => process.exit(0));
+}
