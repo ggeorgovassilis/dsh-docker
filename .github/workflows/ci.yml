@@ -14,7 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - name: Shell tests for the .env parser
+      - name: Shell tests
         run: bash test/lib.test.sh
 
       - name: Node unit and fake-DSH integration tests
@@ -54,8 +54,8 @@ jobs:
         id: image
         run: |
           source scripts/lib.sh
-          load_eng
-          echo "ref=$(image_name)" >> "$GITHUB_OUTPUT"
+          load_env
+          echo "ref=$(image)" >> "$GITHUB_OUTPUT"
 
       - name: Trivy image scan
         uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # v0.33.1
@@ -70,4 +70,4 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq shellcheck
-          shellcheck scripts/*.sh
+          shellcheck -x scripts/*.sh test/lib.test.sh

@@ -150,7 +150,6 @@ RUNTIME_IMAGE=node:24-trixie-slim
 RUNTIME_IMAGE_DIGEST=
 
 # Runtime
-CONTAINER_NAME=dsh-api
 BIND_ADDRESS=127.0.0.1
 HTTP_PORT=3080
 ALLOW_UNAUTHENTICATED_EXPOSURE=0
@@ -641,7 +640,7 @@ The scripts are thin wrappers over Docker; behavior is specified here rather tha
 
 ### `scripts/stop.sh`
 
-- `docker stop "$CONTAINER_NAME"`; do not delete volumes.
+- `docker stop dsh`; do not delete volumes.
 
 ### `scripts/smoke.sh`
 

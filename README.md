@@ -58,7 +58,6 @@ Everything else has a sensible default. The settings you are most likely to chan
 |---|---|---|
 | `HTTP_PORT` | `3080` | The port the API listens on. |
 | `BIND_ADDRESS` | `127.0.0.1` | Which host address the API is reachable on. Keep it on loopback unless you know what you are doing. |
-| `CONTAINER_NAME` | `dsh-api` | The container name. A leading `/` is stripped, because Docker's own tools render every name as `/name`. |
 | `DSH_MODEL` | `deepseek-v4-flash` | The model DSH uses. |
 | `MEMORY_LIMIT` / `CPU_LIMIT` | `2g` / `2` | How much memory and CPU the container may use. |
 
@@ -102,14 +101,11 @@ A few useful endpoints:
 ```bash
 scripts/stop.sh        # stop it (your data is kept)
 scripts/run.sh -d      # start it again
-docker logs -f dsh-api # read its logs
+docker logs -f dsh     # read its logs
 ```
 
-`docker ps --format '{{.Names}}'` prints `dsh-api`. Some Docker tooling
-(`docker inspect -f '{{.Name}}'`, the API, some UIs) prints `/dsh-api`
-instead: that leading slash is how Docker stores names internally, not part
-of the name you configured. The scripts strip it if one appears in
-`CONTAINER_NAME`.
+The container is always named `dsh`. (Docker itself stores names with a
+leading slash, so `docker inspect -f '{{.Name}}'` shows `/dsh`; that is normal.)
 
 ## Updating DSH
 
