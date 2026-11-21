@@ -1,2 +1,3 @@
 #!/usr/bin/env bash
-docker stop dsh
+# Stop and remove the container. The DSH home volume is kept.
+docker rm --force dsh

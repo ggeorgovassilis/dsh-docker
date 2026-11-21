@@ -21,6 +21,9 @@ else
   mode=(--rm)
 fi
 
+# Replace a container left behind by a previous run.
+docker rm --force dsh >/dev/null 2>&1 || true
+
 docker run "${mode[@]}" --name dsh \
   --read-only --tmpfs '/tmp:rw,noexec,nosuid,nodev,size=256m' \
   --cap-drop ALL --security-opt 'no-new-privileges:true' \

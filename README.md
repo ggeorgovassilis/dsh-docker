@@ -99,7 +99,7 @@ A few useful endpoints:
 ## Managing the container
 
 ```bash
-scripts/stop.sh        # stop it (your data is kept)
+scripts/stop.sh        # stop and remove it (your data is kept)
 scripts/run.sh -d      # start it again
 docker logs -f dsh     # read its logs
 ```
@@ -137,7 +137,8 @@ Two folders matter:
 - A Docker volume (`DSH_HOME_VOLUME`, default `dsh-api-home`) — DSH's own
   state, kept between restarts.
 
-`scripts/stop.sh` never deletes either of them.
+`scripts/stop.sh` removes the container; it never deletes your workspace
+folder or the DSH home volume.
 
 ## License
 
