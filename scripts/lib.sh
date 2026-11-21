@@ -23,7 +23,8 @@ load_env() {
   : "${DSH_HOME_VOLUME:=dsh-api-home}"
   : "${WORKSPACE:=/workspace}"
   : "${DSH_CWD:=/workspace}"
-  : "${MEMORY_LIMIT:=2g}"
+  : "${DOCKER_SOCKET:=/var/run/docker.sock}"
+  : "${MEMORY_LIMIT:=12g}"
   : "${CPU_LIMIT:=2}"
   : "${PROJECTS_PATH:=}"
 

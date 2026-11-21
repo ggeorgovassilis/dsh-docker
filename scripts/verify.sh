@@ -13,4 +13,14 @@ version=$(dsh_version)
   || die "image label does not match dsh $version"
 grep -q -- '--read-only' scripts/run.sh || die "run.sh must use --read-only"
 grep -q -- '--cap-drop ALL' scripts/run.sh || die "run.sh must drop capabilities"
+grep -q -- ':/var/run/docker.sock' scripts/run.sh || die "run.sh must mount the Docker socket"
+docker run --rm --entrypoint sh "$image" -c 'docker --version && gh --version && git --version && pnpm --version' >/dev/null \
+  || die "image is missing docker, gh, git or pnpm"
+
+# .env is passed to the container with --env-file, so its variables must reach
+# the container environment (and the commands the agent runs).
+if [ -n "${GH_TOKEN:-}" ]; then
+  docker run --rm --env-file .env --entrypoint sh "$image" -c 'test -n "$GH_TOKEN"' \
+    || die "GH_TOKEN from .env is not visible in the container"
+fi
 echo "verify: ok ($version)"

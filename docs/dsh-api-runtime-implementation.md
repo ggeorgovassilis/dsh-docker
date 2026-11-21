@@ -35,7 +35,7 @@
 ### Non-goals
 
 - DSH Web UI, noVNC, Chromium, X11, Browser Use, plugin market, Super Agent.
-- `gh`, `pnpm` plugin management, third-party DSH plugins.
+- Third-party DSH plugins and plugin management.
 - Multi-tenant authentication or authorization.
 - Kubernetes manifests (the image must be Kubernetes-friendly, but manifests are out of scope).
 - Reimplementing DSH or its SDK protocol.
@@ -329,8 +329,13 @@ Mount only:
 
 - `${DSH_HOME_VOLUME}:/home/node/.dsh`
 - `${WORKSPACE_HOST}:${WORKSPACE}`
+- `${DOCKER_SOCKET}:/var/run/docker.sock` (and add the socket's group with
+  `--group-add` so UID 1000 can use it)
 
-Do not mount the Docker socket. Do not run privileged. Do not use host networking.
+The image also contains the Docker CLI, `gh`, `git` and `pnpm`. Mounting the Docker
+socket gives the container control of the host daemon, which is equivalent to
+root on the host: treat the container boundary as open and only run trusted
+workloads. Do not run privileged. Do not use host networking.
 
 ---
 
@@ -589,6 +594,9 @@ Do **not** use session IDs, request IDs, or raw URL paths as metric labels: they
 - Include `ts`, `level`, `msg`, `request_id`, `rpc_id`, `method`, `session_id`, `duration_ms`, `status`.
 - Never log API keys, authorization headers, prompt content, or tool output.
 - Forward DSH stderr with a `[dsh]` prefix.
+- Log the container's memory limit at startup, and when a supervised process
+  dies by `SIGKILL`, read `memory.events` from the cgroup. A cgroup OOM kill
+  leaves no log of its own, so without this it looks like an unexplained crash.
 
 ### DSH's own telemetry
 
@@ -724,9 +732,22 @@ Mitigations:
 - Consider gVisor/Kata/Firecracker if the workload is untrusted.
 - The metrics endpoint is unauthenticated too. Expose `/metrics` only to trusted scrapers or a private monitoring network.
 
+### Docker socket
+
+`scripts/run.sh` mounts the host Docker socket so the agent can run Docker
+commands. This makes the container's isolation conditional:
+
+- The socket grants control of the host Docker daemon, which is equivalent to
+  root on the host (a client can start a privileged container and mount any
+  host path).
+- Anyone who can send requests to DSH can therefore reach the host through
+  Docker.
+- Do not expose the API to untrusted networks while the socket is mounted; if
+  Docker access inside the container is not needed, remove the mount.
+
 ### Secrets
 
-- `.env` contains model credentials. Mode `0600`, git-ignored, never baked into the image.
+- `.env` contains model credentials and, optionally, `GH_TOKEN`. Mode `0600`, git-ignored, never baked into the image. `run.sh` passes the whole file with `--env-file`, so those variables are visible to every process in the container and in `docker inspect`.
 - `docker inspect` exposes environment variables to anyone with Docker access; restrict Docker access.
 - Never log credentials or request headers.
 - Rotate keys if `.env` is leaked.
@@ -793,7 +814,8 @@ The implementation is done when all of the following are true:
 - [ ] `GET /readyz` returns 200 only after a successful auto-initialize.
 - [ ] `GET /metrics` returns the required Prometheus metrics.
 - [ ] `DSH_TELEMETRY_MODE=DISABLED` is the default.
-- [ ] The container runs as non-root, with a read-only root, dropped capabilities, and no Docker socket.
+- [ ] The container runs as non-root, with a read-only root and dropped capabilities.
+- [ ] The image provides `docker` (with buildx), `gh`, `git` and `pnpm`, and `scripts/run.sh` mounts the Docker socket with the socket's group.
 - [ ] `scripts/update-dsh.sh next` updates `package.json`, `package-lock.json`, and `.env`, then builds and passes the fake smoke test.
 - [ ] `dsh --version` and the image label match the pinned `package.json` version.
 - [ ] No `latest` tag is published automatically.

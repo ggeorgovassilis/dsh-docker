@@ -21,9 +21,13 @@ else
   mode=(--rm)
 fi
 
+[ -S "$DOCKER_SOCKET" ] || die "Docker socket not found: $DOCKER_SOCKET"
+docker_gid=$(stat -c '%g' "$DOCKER_SOCKET")
+
 mounts=(
   --volume "$DSH_HOME_VOLUME:/home/node/.dsh"
   --volume "$WORKSPACE_HOST:$WORKSPACE"
+  --volume "$DOCKER_SOCKET:/var/run/docker.sock"
 )
 
 # Mount your projects at the same absolute path inside the container, so a
@@ -38,7 +42,7 @@ docker rm --force dsh >/dev/null 2>&1 || true
 docker run "${mode[@]}" --name dsh \
   --read-only --tmpfs '/tmp:rw,noexec,nosuid,nodev,size=256m' \
   --cap-drop ALL --security-opt 'no-new-privileges:true' \
-  --pids-limit 512 --user 1000:1000 --stop-timeout 30 \
+  --pids-limit 512 --user 1000:1000 --group-add "$docker_gid" --stop-timeout 30 \
   --memory "$MEMORY_LIMIT" --cpus "$CPU_LIMIT" \
   --publish "${BIND_ADDRESS}:${HTTP_PORT}:3080" \
   --publish "${BIND_ADDRESS}:${WEB_PORT}:${WEB_PORT}" \

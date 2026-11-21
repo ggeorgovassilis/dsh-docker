@@ -53,6 +53,12 @@ expect_fails "requires an existing workspace" "WORKSPACE_HOST=/nope/nope" 'load_
 expect "leaves PROJECTS_PATH empty by default" "" \
   'load_env; [ -z "$PROJECTS_PATH" ]'
 
+expect "defaults the Docker socket" "" \
+  'load_env; [ "$DOCKER_SOCKET" = /var/run/docker.sock ]'
+
+expect "defaults the memory limit" "" \
+  'load_env; [ "$MEMORY_LIMIT" = 12g ]'
+
 expect "accepts an existing absolute PROJECTS_PATH" "PROJECTS_PATH=$tmp" \
   'load_env; [ "$PROJECTS_PATH" = "$PWD" ] || [ -d "$PROJECTS_PATH" ]'
 

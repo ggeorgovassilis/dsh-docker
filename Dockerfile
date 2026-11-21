@@ -29,15 +29,23 @@ RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
 
 FROM ${RUNTIME_IMAGE}
 
+ARG PNPM_VERSION=12.21.0
+
 RUN apt-get update \
  && apt-get install --yes --no-install-recommends \
       ca-certificates \
+      docker-buildx \
+      docker-cli \
+      gh \
       git \
       openssh-client \
       ripgrep \
       tini \
       procps \
  && rm -rf /var/lib/apt/lists/*
+
+RUN npm install --global --ignore-scripts --no-audit --no-fund "pnpm@${PNPM_VERSION}" \
+ && pnpm --version >/dev/null
 
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
@@ -46,8 +54,17 @@ COPY bridge ./bridge
 
 # NODE_ENV is deliberately not set: agent-run commands inherit this
 # environment, and NODE_ENV=production would change their install behaviour.
+# The root filesystem is read-only, so CLI tools keep their config, caches and
+# state in the writable DSH home volume.
 ENV HOME=/home/node \
     DSH_HOME=/home/node/.dsh \
+    DOCKER_CONFIG=/home/node/.dsh/.docker \
+    XDG_CONFIG_HOME=/home/node/.dsh/.config \
+    XDG_DATA_HOME=/home/node/.dsh/.local/share \
+    XDG_CACHE_HOME=/home/node/.dsh/.cache \
+    PNPM_HOME=/home/node/.dsh/pnpm \
+    GIT_CONFIG_GLOBAL=/home/node/.dsh/.gitconfig \
+    PATH=/home/node/.dsh/pnpm:$PATH \
     DSH_BIN=/app/node_modules/.bin/dsh \
     DSH_CWD=/workspace \
     DSH_TELEMETRY_MODE=DISABLED \
@@ -62,8 +79,9 @@ ENV HOME=/home/node \
 
 # Chown only the writable directories. node_modules is world-readable and the
 # bridge never writes to /app; a recursive chown of /app is needlessly slow.
-RUN mkdir -p /home/node/.dsh /workspace \
- && chown node:node /home/node/.dsh /workspace
+RUN mkdir -p /home/node/.dsh/.docker /home/node/.dsh/.config \
+      /home/node/.dsh/.local/share /home/node/.dsh/.cache /home/node/.dsh/pnpm /workspace \
+ && chown -R node:node /home/node/.dsh /workspace
 
 USER node
 WORKDIR /workspace
