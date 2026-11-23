@@ -9,6 +9,10 @@ die() {
   exit 1
 }
 
+warn() {
+  echo "warning: $*" >&2
+}
+
 load_env() {
   [ -f .env ] || die "no .env (copy .env.example and fill it in)"
   set -a
@@ -17,6 +21,9 @@ load_env() {
   set +a
 
   : "${IMAGE_REPOSITORY:=dsh-api-runtime}"
+  : "${TOOLS_IMAGE_REPOSITORY:=${IMAGE_REPOSITORY}-tools}"
+  : "${CONTAINER_NAME:=dsh}"
+  : "${TOOLS_CONTAINER_NAME:=dsh-tools}"
   : "${HTTP_PORT:=3080}"
   : "${WEB_PORT:=8080}"
   : "${BIND_ADDRESS:=127.0.0.1}"
@@ -48,4 +55,27 @@ dsh_version() {
 
 image() {
   echo "${IMAGE_REPOSITORY}:${IMAGE_TAG:-$(dsh_version)}"
+}
+
+tools_image() {
+  echo "${TOOLS_IMAGE_REPOSITORY}:${TOOLS_IMAGE_TAG:-${IMAGE_TAG:-$(dsh_version)}}"
+}
+
+# Write the DSH-runtime environment to a temporary file and print its path.
+# The caller is responsible for deleting it. Tool configuration and credentials
+# are deliberately excluded so the pure image never inherits them.
+runtime_env_file() {
+  local file name
+  file=$(mktemp)
+  chmod 600 "$file"
+
+  while IFS= read -r name; do
+    case "$name" in
+      DSH_*|LOG_LEVEL|INIT_TIMEOUT_MS|RPC_TIMEOUT_MS|MAX_INFLIGHT|MAX_BODY_BYTES|ENABLE_APPROVALS|ENABLE_USER_QUESTIONS|STOP_BUDGET_MS|ALLOW_UNAUTHENTICATED_EXPOSURE|WORKSPACE|*_API_KEY|*_BASE_URL|HTTP_PROXY|HTTPS_PROXY|NO_PROXY|ALL_PROXY)
+        printf '%s=%s\n' "$name" "${!name}" >>"$file"
+        ;;
+    esac
+  done < <(compgen -e)
+
+  printf '%s\n' "$file"
 }

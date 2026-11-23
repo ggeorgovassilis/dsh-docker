@@ -1,5 +1,8 @@
 # syntax=docker/dockerfile:1.7
 
+# Pure DSH runtime image. Tooling lives in Dockerfile.tools and derives from
+# this image; do not add agent CLI tools or tool credentials here.
+
 # build.sh appends "@sha256:..." when a digest is configured.
 ARG NODE_IMAGE=node:24-trixie
 ARG RUNTIME_IMAGE=node:24-trixie-slim
@@ -31,19 +34,16 @@ FROM ${RUNTIME_IMAGE}
 
 ARG PNPM_VERSION=12.21.0
 
+# DSH needs a CA bundle and an init process. Agent CLI tools belong in
+# Dockerfile.tools, not here.
 RUN apt-get update \
  && apt-get install --yes --no-install-recommends \
       ca-certificates \
-      docker-buildx \
-      docker-cli \
-      gh \
-      git \
-      openssh-client \
-      ripgrep \
       tini \
-      procps \
  && rm -rf /var/lib/apt/lists/*
 
+# pnpm is retained in the pure image because `dsh plugin` delegates profile
+# package management to it. It is not an agent-facing tool dependency.
 RUN npm install --global --ignore-scripts --no-audit --no-fund "pnpm@${PNPM_VERSION}" \
  && pnpm --version >/dev/null
 
@@ -54,16 +54,14 @@ COPY bridge ./bridge
 
 # NODE_ENV is deliberately not set: agent-run commands inherit this
 # environment, and NODE_ENV=production would change their install behaviour.
-# The root filesystem is read-only, so CLI tools keep their config, caches and
-# state in the writable DSH home volume.
+# The root filesystem is read-only, so DSH keeps its config, caches and state
+# in the writable DSH home volume.
 ENV HOME=/home/node \
     DSH_HOME=/home/node/.dsh \
-    DOCKER_CONFIG=/home/node/.dsh/.docker \
     XDG_CONFIG_HOME=/home/node/.dsh/.config \
     XDG_DATA_HOME=/home/node/.dsh/.local/share \
     XDG_CACHE_HOME=/home/node/.dsh/.cache \
     PNPM_HOME=/home/node/.dsh/pnpm \
-    GIT_CONFIG_GLOBAL=/home/node/.dsh/.gitconfig \
     PATH=/home/node/.dsh/pnpm:$PATH \
     DSH_BIN=/app/node_modules/.bin/dsh \
     DSH_CWD=/workspace \
@@ -79,7 +77,7 @@ ENV HOME=/home/node \
 
 # Chown only the writable directories. node_modules is world-readable and the
 # bridge never writes to /app; a recursive chown of /app is needlessly slow.
-RUN mkdir -p /home/node/.dsh/.docker /home/node/.dsh/.config \
+RUN mkdir -p /home/node/.dsh/.config \
       /home/node/.dsh/.local/share /home/node/.dsh/.cache /home/node/.dsh/pnpm /workspace \
  && chown -R node:node /home/node/.dsh /workspace
 
@@ -94,7 +92,8 @@ LABEL org.opencontainers.image.title="DSH API Runtime" \
       org.opencontainers.image.description="Unauthenticated HTTP/JSON-RPC gateway for the DeepSeek Harness SDK runtime" \
       org.opencontainers.image.version="${IMAGE_VERSION}" \
       org.opencontainers.image.revision="${IMAGE_REVISION}" \
-      io.example.dsh.version="${DSH_VERSION}"
+      io.example.dsh.version="${DSH_VERSION}" \
+      io.example.dsh.variant="core"
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=20s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:'+(process.env.HTTP_PORT||3080)+'/readyz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"

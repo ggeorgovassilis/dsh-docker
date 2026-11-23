@@ -1,8 +1,8 @@
-# DSH API Runtime — Proposal
+# DSH API Runtime — Specification
 
-**Status:** proposal — resolve the blocking questions in [Open questions](#open-questions) before implementing.  
-**Target:** the standalone repository `ggeorgovassilis/dsh-docker`.  
-**Goal:** a Docker image that runs DeepSeek Harness as an unauthenticated HTTP API (JSON-RPC over HTTP plus SSE events), with Prometheus metrics, configured entirely from `.env` and operated via `docker exec`, and a one-command DSH update flow.
+**Status:** implemented; tool configuration normalisation is tracked separately.
+**Target:** the standalone repository `ggeorgovassilis/dsh-docker`.
+**Goal:** a pure DSH container that exposes DeepSeek Harness as an unauthenticated HTTP API (JSON-RPC over HTTP plus SSE events), with Prometheus metrics. A derived tool-enabled image adds optional agent CLI tooling without changing DSH. Both variants are configured from `.env`, operated via `docker exec`, and upgraded with a one-command DSH update flow.
 
 [Acceptance criteria](#acceptance-criteria) is the completion contract.
 
@@ -23,13 +23,12 @@
 
 ### In scope
 
-- Build a container image containing:
-  - the official `@deepseek-ai/dsh` npm package, pinned to an exact version;
-  - a small HTTP bridge that exposes the DSH SDK runtime over HTTP;
-  - Prometheus metrics over HTTP.
-- Run the image with `docker run` or `docker compose`.
-- Configure everything from one `.env` file; operate it with `.env` and `docker exec`.
-- Build, run, stop, smoke-test, and upgrade with shell scripts.
+- Build two container images:
+  - a pure image containing the official `@deepseek-ai/dsh` npm package pinned to an exact version, a small HTTP bridge, and Prometheus metrics over HTTP;
+  - a tool-enabled image derived from the pure image, adding `git`, `gh`, `openssh-client`, Docker CLI/buildx, `ripgrep` and `procps`.
+- Run either image with `docker run` or `docker compose`.
+- Configure DSH from one `.env` file; expose tool settings only to the tool-enabled wrapper.
+- Build, run, stop, smoke-test, and upgrade both variants with shell scripts.
 - Expose DSH **without authentication**.
 
 ### Non-goals
@@ -59,6 +58,8 @@ The security consequences of "no authentication" are documented once, in [Securi
 | Telemetry | Prometheus `/metrics` on the API port | Pull metrics over HTTP; no OTLP push in v1. |
 | DSH telemetry | disabled by default | Avoid sending product/session telemetry to DeepSeek. |
 | Versioning | exact DSH version pinned in `package.json`; `.env` `IMAGE_TAG` defaults to it | Reproducible builds; one source of truth. |
+| Image split | pure DSH image plus a derived tool-enabled image | DSH stays the baseline; agent CLI tools are an explicit extension. |
+| Wrappers | `run-core.sh` / `run-tools.sh` over shared launch logic | The pure wrapper cannot accidentally inherit tool mounts or tool configuration. |
 | Auth | none, by requirement | Default bind is `127.0.0.1`; wide bind requires an explicit opt-in flag. |
 
 ### Important correction about "HTTP API"
@@ -86,6 +87,15 @@ flowchart LR
 
 One HTTP listener on `HTTP_PORT` (default `3080`) serves `/v1/rpc`, `/v1/events`, `/v1/status`, `/healthz`, `/readyz`, and `/metrics`.
 
+The launch boundary has two profiles:
+
+| Profile | Wrapper | Image | Extra facilities |
+|---|---|---|---|
+| `core` | `scripts/run-core.sh` (and the `scripts/run.sh` alias) | `dsh-api-runtime:<version>` | None beyond DSH runtime dependencies. |
+| `tools` | `scripts/run-tools.sh` | `dsh-api-runtime-tools:<version>` | Agent CLI tools and, when available, the host Docker socket. |
+
+Both wrappers share `scripts/run-container.sh`; tool-specific mounts and environment are added only in the `tools` branch.
+
 ---
 
 ## Repository layout
@@ -94,7 +104,8 @@ One HTTP listener on `HTTP_PORT` (default `3080`) serves `/v1/rpc`, `/v1/events`
 dsh-api-runtime/
 ├── .env.example
 ├── .gitignore
-├── Dockerfile
+├── Dockerfile              # pure DSH runtime
+├── Dockerfile.tools        # derived tool-enabled image
 ├── package.json
 ├── package-lock.json
 ├── README.md
@@ -102,18 +113,23 @@ dsh-api-runtime/
 │   ├── server.mjs        # HTTP listener, routing, SSE, lifecycle
 │   ├── dsh.mjs           # spawn, framing, JSON-RPC, init, supervision
 │   ├── telemetry.mjs     # Prometheus metrics + JSON logging
+│   ├── supervisor.mjs    # process supervision
 │   └── config.mjs        # env parsing/validation
 ├── scripts/
-│   ├── lib.sh            # strict .env loader, validation helpers
-│   ├── build.sh
-│   ├── run.sh
-│   ├── stop.sh
+│   ├── lib.sh            # shared helpers, image names, filtered runtime env
+│   ├── build.sh          # builds pure image, then tools image
+│   ├── run-container.sh  # shared launch logic for both profiles
+│   ├── run-core.sh       # pure profile wrapper
+│   ├── run-tools.sh      # tool-enabled profile wrapper
+│   ├── run.sh            # backwards-compatible alias for run-core.sh
+│   ├── stop.sh           # core | tools | all
 │   ├── smoke.sh
 │   ├── verify.sh
 │   └── update-dsh.sh
 ├── test/
 │   ├── fake-dsh.mjs      # deterministic JSON-RPC fixture for CI
-│   └── bridge.test.mjs
+│   ├── bridge.test.mjs
+│   └── lib.test.sh
 └── .github/workflows/
     ├── ci.yml
     └── update-dsh.yml
@@ -142,43 +158,49 @@ Host requirements: Linux (preferred), Bash 4+, Docker Engine 24+, Docker Buildx,
 ### `.env.example`
 
 ```dotenv
-# Build
-IMAGE_TAG=0.2.2-rc.3        # defaults to the pinned @deepseek-ai/dsh version
-NODE_IMAGE=node:24-trixie
-NODE_IMAGE_DIGEST=
-RUNTIME_IMAGE=node:24-trixie-slim
-RUNTIME_IMAGE_DIGEST=
-
 # Runtime
-BIND_ADDRESS=127.0.0.1
+BIND_ADDRESS=0.0.0.0
 HTTP_PORT=3080
-ALLOW_UNAUTHENTICATED_EXPOSURE=0
+WEB_PORT=8080
+ALLOW_UNAUTHENTICATED_EXPOSURE=1
+
+# Images and container names
+IMAGE_REPOSITORY=dsh-api-runtime
+TOOLS_IMAGE_REPOSITORY=dsh-api-runtime-tools
+IMAGE_TAG=
+CONTAINER_NAME=dsh
+TOOLS_CONTAINER_NAME=dsh-tools
+
+# Workspace
 DSH_HOME_VOLUME=dsh-api-home
 WORKSPACE_HOST=/srv/dsh-workspace
 WORKSPACE=/workspace
 DSH_CWD=/workspace
+PROJECTS_PATH=
 
-# Provider/model (verified against @deepseek-ai/dsh 0.2.2-rc.3)
+# Tool-enabled profile only
+DOCKER_SOCKET=/var/run/docker.sock
+# GH_TOKEN=github_pat_replace-me
+
+# Provider/model
 DSH_PROVIDER=deepseek-official
 DSH_MODEL=deepseek-v4-flash
 DSH_REASONING_EFFORT=
 DSH_MAX_TOKENS=
-
-# Model credentials. Never commit this file.
 DEEPSEEK_API_KEY=replace-me
 
-# Bridge behavior
-INIT_TIMEOUT_MS=60000
-RPC_TIMEOUT_MS=300000
-MAX_INFLIGHT=16
-MAX_BODY_BYTES=8388608
-ENABLE_APPROVALS=0
-ENABLE_USER_QUESTIONS=0
-
-# Telemetry
+# Limits and logging
+MEMORY_LIMIT=12g
+CPU_LIMIT=2
 LOG_LEVEL=info
 DSH_TELEMETRY_MODE=DISABLED
 ```
+
+`.env` is shared by both wrappers for DSH settings, but only the tools wrapper
+currently passes the legacy tool-specific values. The pure wrapper's filtered
+runtime file excludes `GH_TOKEN`, `DOCKER_SOCKET`, `DOCKER_CONFIG` and
+`GIT_CONFIG_GLOBAL`.
+
 
 ### Required validation
 
@@ -194,114 +216,61 @@ DSH_TELEMETRY_MODE=DISABLED
 
 ### Runtime environment
 
-`run.sh` must not pass the whole `.env` file to Docker. Generate a temporary runtime env file containing only:
+The pure wrapper must not pass the whole `.env` file to Docker. `runtime_env_file` generates a temporary environment file containing only DSH/runtime values:
 
-- `DEEPSEEK_API_KEY` and any provider credentials;
+- `DEEPSEEK_API_KEY` and provider credentials matching `*_API_KEY`;
+- provider endpoints matching `*_BASE_URL`;
 - `DSH_*`;
-- `LOG_*`;
-- `INIT_TIMEOUT_MS`, `RPC_TIMEOUT_MS`, `MAX_INFLIGHT`, `MAX_BODY_BYTES`, `ENABLE_APPROVALS`, `ENABLE_USER_QUESTIONS`;
-- `WORKSPACE`, `DSH_CWD`.
+- `LOG_LEVEL`;
+- `INIT_TIMEOUT_MS`, `RPC_TIMEOUT_MS`, `MAX_INFLIGHT`, `MAX_BODY_BYTES`, `ENABLE_APPROVALS`, `ENABLE_USER_QUESTIONS`, `STOP_BUDGET_MS`;
+- `WORKSPACE`;
+- proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `ALL_PROXY`).
 
-Delete the temporary file on exit. Never print its contents.
+The temporary file is deleted on exit. It must exclude tool-specific values such as `GH_TOKEN`, `GITHUB_TOKEN`, `DOCKER_SOCKET`, `DOCKER_CONFIG` and `GIT_CONFIG_GLOBAL`.
+
+The tools wrapper currently retains the legacy behaviour of passing `.env` and adds the tool configuration paths it needs. Moving tool configuration and credentials to a dedicated tools volume is a follow-up; DSH itself must not gain tool-specific authentication code.
 
 ---
 
 ## Container image
 
-### Dockerfile shape
+### Pure image: `Dockerfile`
+
+The pure image contains only DSH runtime dependencies:
+
+- multi-stage `deps` build, with native packages rebuilt by explicit allowlist;
+- `node_modules`, `package.json` and the bridge copied into the runtime stage;
+- `ca-certificates` and `tini`;
+- `pnpm`, retained because `dsh plugin` delegates profile package management to it;
+- no `git`, `gh`, `openssh-client`, Docker CLI/buildx, `ripgrep` or `procps`;
+- no `DOCKER_CONFIG` or `GIT_CONFIG_GLOBAL`.
+
+The image label `io.example.dsh.variant` is `core`.
+
+### Tool image: `Dockerfile.tools`
+
+The tool image is derived, not a separate DSH build:
 
 ```dockerfile
-# syntax=docker/dockerfile:1.7
-
-# build.sh appends "@sha256:..." when a digest is set.
-ARG NODE_IMAGE=node:24-trixie
-ARG RUNTIME_IMAGE=node:24-trixie-slim
-FROM ${NODE_IMAGE} AS deps
-
-ARG DSH_VERSION
-RUN apt-get update \
- && apt-get install --yes --no-install-recommends python3 make g++ \
- && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /app
-COPY package.json package-lock.json ./
-# Explicit lifecycle-script allowlist; do not blanket-allow all scripts.
-RUN npm ci --omit=dev --ignore-scripts \
- && npm rebuild --foreground-scripts node-pty koffi @deepseek-ai/dsh-subprocess-local @google/genai protobufjs \
- && test "$(/app/node_modules/.bin/dsh --version)" = "$DSH_VERSION"
-
-FROM ${RUNTIME_IMAGE}
-
+ARG CORE_IMAGE
+FROM ${CORE_IMAGE}
+USER root
 RUN apt-get update \
  && apt-get install --yes --no-install-recommends \
-      ca-certificates \
-      git \
-      openssh-client \
-      ripgrep \
-      tini \
-      procps \
+      docker-buildx docker-cli gh git openssh-client ripgrep procps \
  && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /app
-COPY --from=deps /app/node_modules ./node_modules
-COPY package.json ./
-COPY bridge ./bridge
-
-# NODE_ENV is deliberately not set: agent-run commands inherit this
-# environment, and NODE_ENV=production would change their install behaviour.
-ENV HOME=/home/node \
-    DSH_HOME=/home/node/.dsh \
-    DSH_BIN=/app/node_modules/.bin/dsh \
-    DSH_CWD=/workspace \
-    DSH_TELEMETRY_MODE=DISABLED \
-    NARB_DISABLE_NATIVE_CACHE=1 \
-    DSH_CONTAINER=1 \
-    HTTP_BIND=0.0.0.0 \
-    HTTP_PORT=3080
-
-# Chown only the writable directories. node_modules stays world-readable and
-# the bridge never writes to /app, so a recursive chown of /app is avoided.
-RUN mkdir -p /home/node/.dsh /workspace \
- && chown node:node /home/node/.dsh /workspace
-
 USER node
-WORKDIR /workspace
-EXPOSE 3080
-
-ARG DSH_VERSION
-ARG IMAGE_VERSION=dev
-ARG IMAGE_REVISION=unknown
-LABEL org.opencontainers.image.title="DSH API Runtime" \
-      org.opencontainers.image.version="${IMAGE_VERSION}" \
-      org.opencontainers.image.revision="${IMAGE_REVISION}" \
-      io.example.dsh.version="${DSH_VERSION}"
-
-HEALTHCHECK --interval=30s --timeout=3s --start-period=20s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:'+(process.env.HTTP_PORT||3080)+'/readyz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
-
-ENTRYPOINT ["/usr/bin/tini", "--", "node", "/app/bridge/server.mjs"]
 ```
 
-Notes:
+The image label `io.example.dsh.variant` is `tools`. The bridge, DSH version and entrypoint are inherited unchanged. Tool state is currently placed in the DSH home volume by the wrapper; it must not cause DSH code to acquire tool-specific behaviour.
 
-- The `deps` stage is disposable; the runtime image must not contain a compiler.
-- `package.json` pins `@deepseek-ai/dsh` exactly; `package-lock.json` is the authority for transitive versions.
-- `package.json` also pins the Prometheus client/exporter used by `bridge/telemetry.mjs`.
-- `build.sh` is responsible for appending image digests. Pass complete references (`node:24-trixie@sha256:...`) as `NODE_IMAGE` / `RUNTIME_IMAGE` build args; the `FROM` line must not compose digests itself.
-- `@deepseek-ai/dsh` is installed as a project dependency, not globally, so the lockfile stays authoritative.
-- `node-pty` is the main native dependency. Validate the rebuild allowlist against the DSH version you pin.
-- Do not install `pnpm`, Chromium, X11, noVNC, Browser Use, or `gh`.
-- The runtime image does **not** set `NODE_ENV=production`. The bridge inherits
-  its environment into agent-run commands, and `production` would change their
-  dependency-install behaviour.
-- `HTTP_BIND=0.0.0.0` is set *inside* the image because Docker port publishing
-  (`-p`) only reaches a container process that binds a non-loopback interface.
-  Loopback enforcement therefore lives in `scripts/run.sh`/`scripts/lib.sh` on
-  the host `BIND_ADDRESS`, not in the image. Running the image directly with a
-  wide `-p` bypasses that guard.
-- `DSH_CONTAINER=1` marks the process as running inside the image so the bridge
-  downgrades its non-loopback warning; `NARB_DISABLE_NATIVE_CACHE=1` keeps DSH's
-  native addon loader from copying `.node` files into the `noexec` `/tmp`.
+### Build order
+
+`scripts/build.sh`:
+
+1. builds the pure image and tags it `${IMAGE_REPOSITORY}:${IMAGE_TAG}`;
+2. builds `Dockerfile.tools` with `CORE_IMAGE` set to that exact image reference and tags it `${TOOLS_IMAGE_REPOSITORY}:${IMAGE_TAG}`;
+3. verifies that both images run the pinned DSH version.
 
 ### Build reproducibility
 
@@ -309,11 +278,11 @@ Notes:
 - Commit `package-lock.json`.
 - Build with BuildKit; add `--sbom=true --provenance=mode=max` for release builds.
 - Optionally sign with cosign and scan with Trivy/Grype in CI.
-- Do not publish a floating `latest` tag. Tag by exact DSH version, e.g. `dsh-api-runtime:0.2.2-rc.3`.
+- Do not publish a floating `latest` tag. Tag by exact DSH version, e.g. `dsh-api-runtime:0.2.2-rc.5`.
 
 ### Runtime security
 
-Use these flags in `scripts/run.sh`:
+Both wrappers use these flags:
 
 ```text
 --read-only
@@ -325,17 +294,13 @@ Use these flags in `scripts/run.sh`:
 --stop-timeout 30
 ```
 
-Mount only:
+The pure profile mounts only:
 
 - `${DSH_HOME_VOLUME}:/home/node/.dsh`
 - `${WORKSPACE_HOST}:${WORKSPACE}`
-- `${DOCKER_SOCKET}:/var/run/docker.sock` (and add the socket's group with
-  `--group-add` so UID 1000 can use it)
+- `${PROJECTS_PATH}:${PROJECTS_PATH}` when configured
 
-The image also contains the Docker CLI, `gh`, `git` and `pnpm`. Mounting the Docker
-socket gives the container control of the host daemon, which is equivalent to
-root on the host: treat the container boundary as open and only run trusted
-workloads. Do not run privileged. Do not use host networking.
+The tools profile additionally mounts `${DOCKER_SOCKET}:/var/run/docker.sock` when the socket exists, and adds the socket's group with `--group-add`. Mounting the Docker socket gives the container control of the host daemon, equivalent to root on the host. The pure image does not contain the Docker CLI and never receives the socket.
 
 ---
 
@@ -608,64 +573,68 @@ Do **not** use session IDs, request IDs, or raw URL paths as metric labels: they
 
 ## Shell scripts
 
-The scripts are thin wrappers over Docker; behavior is specified here rather than full code.
+The scripts are thin wrappers over Docker; behaviour is specified here rather than full code.
 
 ### `scripts/lib.sh`
 
-- `load_eng` — strict parser described in [Configuration](#configuration).
-- `require_cmd` — check `docker` and `docker buildx`.
-- `die`, `warn`, `info`.
-- `is_loopback` — validate `BIND_ADDRESS`.
-- `runtime_env_file` — generate the filtered temp env file.
-- `require_image` — check the image exists.
+- `load_env` — load and validate `.env`.
+- `die`, `warn`.
+- `dsh_version` — read the pinned DSH version from `package.json`.
+- `image` — core image reference.
+- `tools_image` — derived tools image reference.
+- `runtime_env_file` — generate the filtered DSH-only environment file and return its path.
+- Container-name defaults: `CONTAINER_NAME=dsh`, `TOOLS_CONTAINER_NAME=dsh-tools`.
 
 ### `scripts/build.sh`
 
 - Load and validate `.env`.
 - Read the pinned DSH version from `package.json` and pass it as the `DSH_VERSION` build arg.
-- Compose base image references from `NODE_IMAGE`/`RUNTIME_IMAGE` and their digests.
-- Build with BuildKit, passing `IMAGE_VERSION` and `IMAGE_REVISION` alongside.
-- Tag `${IMAGE_REPOSITORY}:${IMAGE_TAG}`.
+- Build the pure image with BuildKit, passing `IMAGE_VERSION` and `IMAGE_REVISION`.
+- Build the tools image with `CORE_IMAGE` set to the exact pure image reference.
+- Tag `${IMAGE_REPOSITORY}:${IMAGE_TAG}` and `${TOOLS_IMAGE_REPOSITORY}:${IMAGE_TAG}`.
 - Default `IMAGE_TAG` to the pinned DSH version when empty.
-- Fail if `package-lock.json` is missing or inconsistent.
-- Add `--sbom=true --provenance=mode=max` for release builds.
-- Verify the result with `docker run --rm --entrypoint /app/node_modules/.bin/dsh <image> --version`.
+- Verify both images with `docker run --rm --entrypoint /app/node_modules/.bin/dsh <image> --version`.
 - Do not tag `latest` automatically.
 
-### `scripts/run.sh`
+### `scripts/run-container.sh`
+
+Shared launcher selected by the two public wrappers.
 
 - Load and validate `.env`.
-- Build if the image is missing, unless `--no-build`.
-- Create the DSH home volume if missing.
-- Generate the filtered runtime env file.
-- Run the container with the flags from [Runtime security](#runtime-security), mapping `HTTP_PORT` to container port `3080`, mounting the two volumes, and passing the filtered env file.
-- Default: foreground plus `--rm`, so `Ctrl-C` stops and removes it.
-- `-d`: detached with `--restart unless-stopped` **and without `--rm`** (`docker run` rejects combining them).
-- Add `--memory`/`--cpus` limits appropriate for the host.
-- Print the API base URL and a note that there is no authentication.
 - Refuse a non-loopback `BIND_ADDRESS` unless `ALLOW_UNAUTHENTICATED_EXPOSURE=1`.
-- If `WORKSPACE_HOST` is owned by a UID other than 1000, tell the operator to fix ownership or pass `--user`.
+- Build the required image if it is missing.
+- Create the DSH home volume if missing.
+- Default: foreground plus `--rm`, so `Ctrl-C` stops and removes it.
+- `-d`: detached with `--restart unless-stopped` and without `--rm`.
+- Apply the security flags from [Runtime security](#runtime-security) and the memory/CPU limits.
+- Map host `HTTP_PORT` to container port `3080` and host `WEB_PORT` to container port `8080`.
+- Pure profile: pass the filtered runtime env file and only DSH/workspace mounts.
+- Tools profile: additionally mount the Docker socket when present, add its group, and set `DOCKER_CONFIG` and `GIT_CONFIG_GLOBAL`.
+- Print the API and web UI URLs, the selected profile, and the container name.
+
+### `scripts/run-core.sh` and `scripts/run-tools.sh`
+
+Thin wrappers that call `run-container.sh` with `core` or `tools`. `scripts/run.sh` remains an alias for the pure wrapper.
 
 ### `scripts/stop.sh`
 
-- `docker stop dsh`; do not delete volumes.
+- `scripts/stop.sh` or `scripts/stop.sh core` removes the pure container.
+- `scripts/stop.sh tools` removes the tools container.
+- `scripts/stop.sh all` removes both.
+- Never delete volumes.
 
 ### `scripts/smoke.sh`
 
 Two layers:
 
 1. **Fake-DSH integration test (always runs in CI).**
+   - Run once against the pure image and once against the tools image.
    - Mount the fixture read-only and point the bridge at it with `-v "$PWD/test:/test:ro" -e DSH_BIN=/test/fake-dsh.mjs`.
-   - The fixture responds to `initialize`, `session/prompt`, `session/wait`, and `shutdown`, and emits `session.status` / `session.event`.
-   - Assert:
-     - `/readyz` becomes 200;
-     - `POST /v1/rpc` initialize/prompt works;
-     - SSE receives the expected notification;
-     - `/metrics` contains the required metric names.
+   - Assert `/readyz`, `session/prompt`, SSE notifications and `/metrics`.
 2. **Live smoke (opt-in, costs model credits).**
    - Require `RUN_LIVE_SMOKE=1` and a configured key.
    - Send a prompt such as "Reply with the single word OK".
-   - Wait for idle, assert a non-empty assistant result, then stop.
+   - Wait for idle, then stop.
 
 `DSH_BIN` must be configurable so tests never need a real model.
 
@@ -674,7 +643,7 @@ Two layers:
 ```bash
 scripts/update-dsh.sh next
 scripts/update-dsh.sh latest
-scripts/update-dsh.sh 0.2.2-rc.3
+scripts/update-dsh.sh 0.2.2-rc.5
 ```
 
 Steps:
@@ -683,7 +652,7 @@ Steps:
 2. Refuse to continue if the version is unchanged.
 3. Update `package.json`'s exact `@deepseek-ai/dsh` dependency and `.env` `IMAGE_TAG`.
 4. Regenerate `package-lock.json` in a disposable Node container: `npm install --package-lock-only --ignore-scripts`.
-5. Run `scripts/build.sh` and `scripts/smoke.sh`.
+5. Run `scripts/build.sh` and `scripts/smoke.sh` (both image variants).
 6. Print the diff and the rollback tag. Do **not** auto-commit.
 7. In CI, open a PR with the version, lockfile, and test result.
 
@@ -691,8 +660,12 @@ Steps:
 
 Assert:
 
-- `package.json`'s pinned DSH version == built image `dsh --version` == image label.
-- `package-lock.json` exists and is consistent (`npm ci --dry-run` in a container).
+- `package.json`'s pinned DSH version equals both images' `dsh --version` and image labels.
+- The pure image has variant label `core` and no `gh`, `git`, `docker`, `rg` or `ps`.
+- The tools image has variant label `tools` and contains those tools.
+- `pnpm` remains available in the pure image.
+- The filtered pure runtime environment excludes tool variables such as `GH_TOKEN`, `DOCKER_SOCKET` and `GIT_CONFIG_GLOBAL`.
+- Both wrappers use the read-only/capability-drop security flags.
 - No `latest` tag is produced.
 
 ---
@@ -734,21 +707,29 @@ Mitigations:
 
 ### Docker socket
 
-`scripts/run.sh` mounts the host Docker socket so the agent can run Docker
-commands. This makes the container's isolation conditional:
+Only `scripts/run-tools.sh` mounts the host Docker socket. This makes the
+tools container's isolation conditional:
 
 - The socket grants control of the host Docker daemon, which is equivalent to
   root on the host (a client can start a privileged container and mount any
   host path).
 - Anyone who can send requests to DSH can therefore reach the host through
   Docker.
-- Do not expose the API to untrusted networks while the socket is mounted; if
-  Docker access inside the container is not needed, remove the mount.
+- Do not expose the API to untrusted networks while the socket is mounted.
+- Use the pure profile when Docker access is not needed; it neither installs
+  the Docker CLI nor mounts the socket.
 
 ### Secrets
 
-- `.env` contains model credentials and, optionally, `GH_TOKEN`. Mode `0600`, git-ignored, never baked into the image. `run.sh` passes the whole file with `--env-file`, so those variables are visible to every process in the container and in `docker inspect`.
-- `docker inspect` exposes environment variables to anyone with Docker access; restrict Docker access.
+- `.env` contains model credentials and, optionally for the tools profile,
+  `GH_TOKEN`. Mode `0600`, git-ignored, never baked into the image.
+- The pure wrapper passes only the filtered DSH runtime environment, so
+  `GH_TOKEN` and tool-specific variables never enter the pure container.
+- The tools wrapper currently passes the legacy tool environment. Moving tool
+  credentials to a dedicated tools volume and removing `GH_TOKEN` from
+  `.env` is a follow-up.
+- `docker inspect` exposes environment variables to anyone with Docker access;
+  restrict Docker access.
 - Never log credentials or request headers.
 - Rotate keys if `.env` is leaked.
 
@@ -780,18 +761,20 @@ On pull request:
 
 - `npm ci` / lockfile check.
 - Unit + fake-DSH integration tests.
-- `scripts/build.sh`.
-- Trivy/Grype scan.
-- Verify non-root/read-only flags in the run script.
+- `scripts/build.sh` builds the pure and tools images.
+- `scripts/verify.sh` checks both image variants and the pure/tools binary split.
+- `scripts/smoke.sh` runs the fake-DSH test against both variants.
+- Trivy/Grype scans both images.
+- Verify non-root/read-only flags in the shared run script.
 - `actionlint`/shellcheck (recommended).
 
 On tag/release:
 
-- `docker buildx build --platform linux/amd64,linux/arm64`.
+- `docker buildx build --platform linux/amd64,linux/arm64` for both images.
 - `--sbom=true --provenance=mode=max`.
-- cosign sign.
+- cosign sign both images.
 - Push to the registry.
-- Keep the previous tag.
+- Keep the previous tags.
 
 ### Scheduled update workflow
 
@@ -804,23 +787,23 @@ On tag/release:
 
 ## Acceptance criteria
 
-The implementation is done when all of the following are true:
+The two-image split is done when all of the following are true:
 
-- [ ] `scripts/build.sh` builds a multi-stage image from a clean checkout without host Node.js.
-- [ ] `scripts/run.sh` starts the container using only `.env`; no secrets are baked into the image.
-- [ ] The API listens on `HTTP_PORT`; `/metrics` is served on the same port.
-- [ ] `POST /v1/rpc` with `session/prompt` returns an enqueue receipt.
-- [ ] `GET /v1/events` streams `session.event` and `session.status` notifications.
-- [ ] `GET /readyz` returns 200 only after a successful auto-initialize.
-- [ ] `GET /metrics` returns the required Prometheus metrics.
-- [ ] `DSH_TELEMETRY_MODE=DISABLED` is the default.
-- [ ] The container runs as non-root, with a read-only root and dropped capabilities.
-- [ ] The image provides `docker` (with buildx), `gh`, `git` and `pnpm`, and `scripts/run.sh` mounts the Docker socket with the socket's group.
-- [ ] `scripts/update-dsh.sh next` updates `package.json`, `package-lock.json`, and `.env`, then builds and passes the fake smoke test.
-- [ ] `dsh --version` and the image label match the pinned `package.json` version.
-- [ ] No `latest` tag is published automatically.
-- [ ] A live smoke test succeeds with a real model when explicitly enabled.
-- [ ] `README.md` documents the no-auth risk, default loopback bind, rollback, and volume backup.
+- [ ] `scripts/build.sh` builds the pure image and a tools image derived from its exact tag.
+- [ ] Both images run the pinned DSH version and report it in their image labels.
+- [ ] The pure image does not contain `gh`, `git`, Docker CLI/buildx, `ripgrep` or `procps`.
+- [ ] The tools image contains those tools.
+- [ ] `scripts/run-core.sh` exists and does not mount the tools volume or Docker socket, and does not pass tool-specific environment variables.
+- [ ] `scripts/run-tools.sh` exists and is the only public wrapper that selects the tools image and adds tool mounts/configuration.
+- [ ] Both wrappers support foreground, detached, stop and recreate flows.
+- [ ] `scripts/run.sh` remains a backwards-compatible alias for the pure wrapper.
+- [ ] The pure wrapper's filtered runtime environment excludes `GH_TOKEN`, `GITHUB_TOKEN`, `DOCKER_SOCKET`, `DOCKER_CONFIG` and `GIT_CONFIG_GLOBAL`.
+- [ ] The tools wrapper continues to support the Docker socket when available.
+- [ ] `scripts/verify.sh` checks the pure/tools binary split and the filtered environment.
+- [ ] `scripts/smoke.sh` runs the fake-DSH test against both image variants.
+- [ ] CI builds, verifies and scans both images.
+- [ ] `docs/dsh-api-runtime-implementation.md` describes the two-image architecture, wrappers, build order, credential/tool boundary and test requirements.
+- [ ] `README.md` describes image selection, both wrappers, tool availability, Docker access and security implications.
 
 ---
 
@@ -835,10 +818,15 @@ Resolved during implementation:
 2. Provider/model identifiers are `DSH_PROVIDER=deepseek-official` and
    `DSH_MODEL=deepseek-v4-flash`; the credential env var is
    `DEEPSEEK_API_KEY`.
+3. The pure image is the default runtime; tooling is an explicit derived image.
+4. `scripts/run-core.sh` / `scripts/run-tools.sh` are the public wrappers;
+   `scripts/run.sh` remains an alias for the pure wrapper.
 
 Still open:
 
-3. Do clients need server-to-client approvals or user questions?
-4. Is POST + SSE acceptable, or must browser clients use WebSocket?
-5. Should the workspace be a host bind mount or a named volume?
-6. Which network/CIDR may reach the unauthenticated API, and who owns the reverse proxy or network policy?
+5. Do clients need server-to-client approvals or user questions?
+6. Is POST + SSE acceptable, or must browser clients use WebSocket?
+7. Should the workspace be a host bind mount or a named volume?
+8. Which network/CIDR may reach the unauthenticated API, and who owns the reverse proxy or network policy?
+9. When should tool configuration and GitHub credentials move from the legacy
+   DSH-home paths to a dedicated tools volume?

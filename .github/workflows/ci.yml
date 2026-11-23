@@ -50,19 +50,30 @@ jobs:
       - name: Fake-DSH smoke test
         run: scripts/smoke.sh
 
-      - name: Resolve image reference
+      - name: Resolve image references
         id: image
         run: |
           source scripts/lib.sh
           load_env
-          echo "ref=$(image)" >> "$GITHUB_OUTPUT"
+          echo "core=$(image)" >> "$GITHUB_OUTPUT"
+          echo "tools=$(tools_image)" >> "$GITHUB_OUTPUT"
 
-      - name: Trivy image scan
+      - name: Trivy core image scan
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: ${{ steps.image.outputs.ref }}
+          image-ref: ${{ steps.image.outputs.core }}
           # Pin Trivy too: the action's default version pointed at a release
           # that no longer exists, so its install step failed the job.
+          version: v0.76.2
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "0"
+
+      - name: Trivy tools image scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ steps.image.outputs.tools }}
           version: v0.76.2
           format: table
           severity: HIGH,CRITICAL

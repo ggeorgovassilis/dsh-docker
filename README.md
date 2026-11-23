@@ -7,20 +7,25 @@ This project packages [DeepSeek Harness](https://www.npmjs.com/package/@deepseek
 
 It runs the official `@deepseek-ai/dsh` package unchanged; it does not add features or modify DSH's behaviour.
 
-## Why
+## Two image profiles
 
-DSH is normally run directly on your machine. Running it inside a container instead:
+The project builds two images from the same pinned DSH version:
 
-- **Isolates** DSH and the files it works with from your host system.
-- **Limits the damage** if DSH, or the code it runs, misbehaves. The container runs as an unprivileged user, with a read-only filesystem and no access to your host — except the Docker socket, which is mounted on purpose (see [Docker access](#docker-access)).
-- **Keeps your setup clean** — no Node.js, no npm packages, and no dependencies installed on the host.
+| Profile | Image | What it contains |
+|---|---|---|
+| Pure DSH | `dsh-api-runtime:<version>` | DSH, the HTTP bridge, Node.js, `pnpm` and only the runtime dependencies DSH needs. |
+| Tool-enabled | `dsh-api-runtime-tools:<version>` | The pure image plus `git`, `gh`, `openssh-client`, Docker CLI/buildx, `ripgrep` and `procps`. |
+
+The tool-enabled image extends the pure image; it does not rebuild DSH. Use the
+pure wrapper when DSH should be the only thing in the container, and the tools
+wrapper when the agent needs those extra CLI tools.
 
 ## Requirements
 
 - A Linux host with Docker installed.
 - A DeepSeek API key.
 
-## Quick start
+## Quick start: pure DSH
 
 ```bash
 # 1. Get the code
@@ -32,11 +37,11 @@ cp .env.example .env
 chmod 600 .env
 $EDITOR .env        # set DEEPSEEK_API_KEY and WORKSPACE_HOST
 
-# 3. Build the image
+# 3. Build both images
 scripts/build.sh
 
-# 4. Run it
-scripts/run.sh -d
+# 4. Run the pure DSH container
+scripts/run-core.sh -d
 ```
 
 When it is running (reachable from other machines too, because
@@ -45,12 +50,30 @@ When it is running (reachable from other machines too, because
 - API: `http://<this-host>:3080`
 - Web UI: `http://<this-host>:8080` (see [Using the web UI](#using-the-web-ui))
 
+`scripts/run.sh` is kept as a backwards-compatible alias for
+`scripts/run-core.sh`.
+
+## Quick start: tool-enabled DSH
+
+```bash
+scripts/run-tools.sh -d
+```
+
+This starts the same DSH runtime in `dsh-api-runtime-tools`, mounts the host
+Docker socket when available, and enables the extra CLI tools. It uses the
+container name `dsh-tools` by default.
+
+Both profiles use the same DSH home volume, so sessions and DSH configuration
+are preserved when switching profiles.
+
 ## Configuration
 
-Everything is set in the `.env` file. The whole file is handed to the container
-(`docker run --env-file`), so every variable in it becomes an environment
-variable inside the container and in the commands the agent runs. The only two
-settings you must provide are:
+Configuration is read from `.env`. The pure wrapper does **not** pass the whole
+file to Docker: it generates a temporary DSH-only environment file and excludes
+tool-specific variables such as `GH_TOKEN`, `DOCKER_SOCKET` and
+`GIT_CONFIG_GLOBAL`. The tools wrapper opts into the additional tool settings.
+
+The only two settings you must provide are:
 
 | Setting | What it is |
 |---|---|
@@ -67,7 +90,9 @@ Everything else has a sensible default. The settings you are most likely to chan
 | `DSH_MODEL` | `deepseek-v4-flash` | The model DSH uses. |
 | `MEMORY_LIMIT` / `CPU_LIMIT` | `12g` / `2` | How much memory and CPU the container may use. Running a session costs about 700 MB before any work; raise `MEMORY_LIMIT` if it gets killed (see [Troubleshooting](#troubleshooting)). |
 | `PROJECTS_PATH` | empty | A folder of projects to mount at the same absolute path inside the container. See [Working on your own projects](#working-on-your-own-projects). |
-| `DOCKER_SOCKET` | `/var/run/docker.sock` | The host Docker socket mounted into the container. See [Docker access](#docker-access). |
+| `CONTAINER_NAME` | `dsh` | Container name used by the pure wrapper. |
+| `TOOLS_CONTAINER_NAME` | `dsh-tools` | Container name used by the tools wrapper. |
+| `DOCKER_SOCKET` | `/var/run/docker.sock` | Docker socket mounted only by the tools wrapper. See [Docker access](#docker-access). |
 
 ## Working on your own projects
 
@@ -96,38 +121,47 @@ Notes:
 - Leave `PROJECTS_PATH` empty to skip the extra mount.
 - The container runs as UID 1000. If your files belong to another user, the
   agent cannot write to them; use a folder owned by UID 1000 (or change the
-  `--user` value in `scripts/run.sh`).
+  `--user` value in `scripts/run-container.sh`).
 - The mount is read/write: that is what lets DSH edit your code.
 
 ## Installed tools
 
-The image ships the usual development and delivery tooling, so the agent does
-not have to install anything on the host:
+### Pure image
+
+The pure image contains only the DSH runtime:
 
 | Tool | What it is |
 |---|---|
 | `node`, `npm`, `npx` | Node.js 24 runtime and package manager (the base image DSH runs on). |
-| `pnpm` | Fast package manager, pinned in the [Dockerfile](Dockerfile) via `PNPM_VERSION`. |
-| `git` | Version control, with `openssh-client` for SSH remotes. |
+| `pnpm` | Package manager used by `dsh plugin` for profile management. |
+| `tini` | PID 1 init process for clean signal handling. |
+
+It deliberately does not contain `git`, `gh`, `docker`, `rg` or `ps`.
+
+### Tool-enabled image
+
+The tool-enabled image adds the usual development and delivery tooling:
+
+| Tool | What it is |
+|---|---|
+| `git`, `openssh-client` | Version control and SSH remotes. |
 | `gh` | GitHub's official CLI. |
 | `docker` | Docker CLI, with the `buildx` plugin. Talks to the host daemon (see [Docker access](#docker-access)). |
-| `rg`, `ps`, `tini` | ripgrep for searching, `ps` for process inspection, `tini` as PID 1. |
+| `rg`, `ps` | ripgrep for searching and `ps` for process inspection. |
 
 Check them from the host:
 
 ```bash
-docker exec dsh sh -c 'node --version; pnpm --version; git --version; gh --version | head -1; docker --version'
+docker exec dsh-tools sh -c 'node --version; pnpm --version; git --version; gh --version | head -1; docker --version'
 ```
 
-Every tool keeps its config, cache and state in the writable DSH home volume
-(`/home/node/.dsh`): `DOCKER_CONFIG`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`,
-`XDG_CACHE_HOME`, `PNPM_HOME` (and the pnpm store) and `GIT_CONFIG_GLOBAL`. That
-makes them work despite the read-only root filesystem, and their settings
-survive restarts.
+Tool configuration currently lives in the writable DSH home volume
+(`/home/node/.dsh`). Tool-specific state will be moved to a dedicated tools
+volume in a follow-up change.
 
 ### Docker access
 
-The host Docker socket is mounted at `/var/run/docker.sock`, so DSH runs
+The host Docker socket is mounted by the tools wrapper, so DSH can run
 `docker` commands against your host's daemon:
 
 ```bash
@@ -135,9 +169,10 @@ docker ps
 docker build -t my-app .
 ```
 
-`scripts/run.sh` adds the socket's group to the container user, so commands work
-as UID 1000 without running as root. Point `DOCKER_SOCKET` at another path if
-your daemon listens elsewhere (for example a rootless socket).
+The wrapper adds the socket's group to the container user, so commands work as
+UID 1000. Point `DOCKER_SOCKET` at another path if your daemon listens
+elsewhere (for example a rootless socket). If the socket is absent, the tools
+wrapper continues without Docker access and prints a warning.
 
 > **Warning:** access to the Docker socket is equivalent to root access on the
 > host. Code running in this container can start privileged containers and
@@ -146,30 +181,33 @@ your daemon listens elsewhere (for example a rootless socket).
 
 ### GitHub and git credentials
 
-`gh` and `git` are installed but not authenticated. Either log in inside the
-container:
+`gh` and `git` are available only in the tool-enabled image. Both are
+unauthenticated by default. Log in inside the tools container:
 
 ```bash
-docker exec -it dsh gh auth login
-docker exec -it dsh gh auth setup-git   # lets git push use the gh token
+docker exec -it dsh-tools gh auth login
+docker exec -it dsh-tools gh auth setup-git   # lets git push use the gh token
 ```
 
-or set `GH_TOKEN` in `.env` (it is passed to the container like every other
-`.env` setting). Either way the credentials are written under `/home/node/.dsh`
-(the DSH home volume), so they survive restarts.
+Alternatively, `GH_TOKEN` in `.env` is passed only to the tools container. That
+variable is not available to model shell commands because DSH intentionally
+scrubs credential-shaped environment variables; prefer `gh auth login`, which
+persists credentials in the DSH home volume.
 
-Confirm that the token reached the container without printing it:
+Confirm authentication with:
 
 ```bash
-docker exec dsh sh -c 'test -n "$GH_TOKEN" && echo "GH_TOKEN is set"'
-docker exec dsh gh auth status
+docker exec dsh-tools gh auth status
 ```
+
+Do not print the token.
 
 ### Installing more tools
 
 There is no `curl`, `wget`, `python3` or `jq` in the image, and the root
 filesystem is read-only, so `apt-get install` does not work at runtime. Add
-packages to the [Dockerfile](Dockerfile) and rebuild with `scripts/build.sh`.
+packages to [Dockerfile.tools](Dockerfile.tools) and rebuild with
+`scripts/build.sh`.
 
 ## Using the API
 
@@ -215,7 +253,8 @@ docker logs dsh | grep 'dsh web:'
 # dsh web: http://127.0.0.1:8081/?token=abc123…
 ```
 
-Then open the web UI with that token:
+For the tools container, use `docker logs dsh-tools`. Then open the web UI with
+that token:
 
 ```
 http://127.0.0.1:8080/?token=abc123…
@@ -233,15 +272,19 @@ JaboDSH is a VS Code client for DSH. To connect it:
 2. Run **Authorize External Connection** and paste the launch token from the
    `dsh web:` log line.
 
-## Managing the container
+## Managing the containers
 
 ```bash
-scripts/stop.sh        # stop and remove it (your data is kept)
-scripts/run.sh -d      # start it again
-docker logs -f dsh     # read its logs
+scripts/stop.sh core       # stop and remove the pure container
+scripts/stop.sh tools      # stop and remove the tools container
+scripts/stop.sh all        # stop and remove both
+scripts/run-core.sh -d     # start the pure container again
+scripts/run-tools.sh -d    # start the tools container again
+docker logs -f dsh         # pure container logs
+docker logs -f dsh-tools   # tools container logs
 ```
 
-The container is always named `dsh`.
+`scripts/stop.sh` with no argument stops the pure container. Volumes are kept.
 
 ## Updating DSH
 
@@ -249,12 +292,12 @@ The container is always named `dsh`.
 scripts/update-dsh.sh next
 ```
 
-This updates to the newest DSH version, rebuilds the image, and runs a basic
+This updates to the newest DSH version, rebuilds both images, and runs a basic
 self-test. It does not commit anything; review the changes it prints before
 committing them.
 
-To roll back, keep the previous image around and re-run it with the previous
-`IMAGE_TAG` in `.env`.
+To roll back, keep the previous images around and re-run the appropriate
+wrapper with the previous `IMAGE_TAG` in `.env`.
 
 ## Security
 
@@ -269,10 +312,11 @@ that can reach this host can use them. If that is not what you want, set
 `BIND_ADDRESS=127.0.0.1` in `.env`; otherwise put the host behind a firewall
 or an authenticating reverse proxy.
 
-The mounted Docker socket also weakens the container boundary: anything that
-can make DSH run commands can control the host Docker daemon, which is
-effectively root on the host. If you do not need Docker inside the container,
-remove the socket mount from `scripts/run.sh`.
+The pure image does not mount the Docker socket and contains no agent CLI
+tools. The tools image weakens the container boundary: anything that can make
+DSH run commands can control the host Docker daemon, which is effectively root
+on the host. If you do not need Docker inside the container, use the pure
+profile or leave `DOCKER_SOCKET` unset/nonexistent.
 
 ## Troubleshooting
 
@@ -281,12 +325,12 @@ trace or error is almost always the kernel OOM killer: the container went over
 `MEMORY_LIMIT`. The supervisor now says so explicitly:
 
 ```json
-{"level":"error","msg":"supervised process killed by the out-of-memory killer","name":"dsh-web","signal":"SIGKILL","oomKilled":true,"memory":{"maxBytes":12884901888,"peakBytes":12884901880,"oomKills":1},"hint":"raise MEMORY_LIMIT in .env and run scripts/run.sh -d"}
+{"level":"error","msg":"supervised process killed by the out-of-memory killer","name":"dsh-web","signal":"SIGKILL","oomKilled":true,"memory":{"maxBytes":12884901888,"peakBytes":12884901880,"oomKills":1},"hint":"raise MEMORY_LIMIT in .env and run scripts/run-core.sh -d"}
 ```
 
 An idle container uses around 700 MB (`docker stats dsh`); a busy session can
 use much more. Raise `MEMORY_LIMIT` in `.env` and restart with
-`scripts/run.sh -d`.
+`scripts/run-core.sh -d` or `scripts/run-tools.sh -d`.
 
 To confirm it was the container's own limit rather than host-wide memory
 pressure, check the kernel log on the host:
@@ -301,13 +345,16 @@ The cgroup usage shown inside the container is the same data the kernel used:
 docker exec dsh sh -c 'cat /sys/fs/cgroup/memory.peak /sys/fs/cgroup/memory.events'
 ```
 
+Use `docker exec dsh-tools` for the tools container.
+
 **The container exits as soon as a session starts.** Look for `signal:
 SIGTERM` from `supervised process exited`: something stopped the process, for
 example `docker stop` or a crash on startup. The first error line names the
 process.
 
 **The web UI token changed.** The token is regenerated on every start; read the
-current one with `docker logs dsh | grep 'dsh web:'`.
+current one with `docker logs dsh | grep 'dsh web:'` or
+`docker logs dsh-tools | grep 'dsh web:'`.
 
 ## Where DSH keeps its data
 
@@ -317,8 +364,8 @@ Two folders matter:
 - A Docker volume (`DSH_HOME_VOLUME`, default `dsh-api-home`) — DSH's own
   state, kept between restarts. The web UI and the API share it.
 
-`scripts/stop.sh` removes the container; it never deletes your workspace
-folder or the DSH home volume.
+`scripts/stop.sh` removes containers; it never deletes your workspace folder or
+the DSH home volume.
 
 ## License
 

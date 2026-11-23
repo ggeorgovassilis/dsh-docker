@@ -1,0 +1,40 @@
+# syntax=docker/dockerfile:1.7
+
+# Tool-enabled extension of the pure DSH runtime. This image is selected only
+# by scripts/run-tools.sh. Tool-specific configuration and credential storage
+# are intentionally kept out of the pure image and the DSH bridge.
+ARG CORE_IMAGE
+FROM ${CORE_IMAGE}
+
+USER root
+
+RUN apt-get update \
+ && apt-get install --yes --no-install-recommends \
+      docker-buildx \
+      docker-cli \
+      gh \
+      git \
+      openssh-client \
+      ripgrep \
+      procps \
+ && rm -rf /var/lib/apt/lists/*
+
+# Tool state lives in the DSH home volume for now. Issue #2 will move it to a
+# dedicated tools volume and remove credential-shaped variables from DSH's
+# runtime environment.
+ENV DOCKER_CONFIG=/home/node/.dsh/.docker \
+    GIT_CONFIG_GLOBAL=/home/node/.dsh/.gitconfig
+
+RUN mkdir -p /home/node/.dsh/.docker \
+ && chown -R node:node /home/node/.dsh
+
+USER node
+WORKDIR /workspace
+
+ARG IMAGE_VERSION=dev
+ARG IMAGE_REVISION=unknown
+LABEL org.opencontainers.image.title="DSH API Runtime with tools" \
+      org.opencontainers.image.description="DSH API runtime extended with agent-facing CLI tools" \
+      org.opencontainers.image.version="${IMAGE_VERSION}" \
+      org.opencontainers.image.revision="${IMAGE_REVISION}" \
+      io.example.dsh.variant="tools"
