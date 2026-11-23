@@ -1,24 +1,24 @@
 #!/usr/bin/env bash
-# Shared launcher for the pure and tool-enabled runtime profiles.
+# Shared launcher for the base and tool-enabled runtime profiles.
 
 # shellcheck disable=SC1091
 source "$(dirname "$0")/lib.sh"
 load_env
 
-profile=${1:-core}
+profile=${1:-tools}
 shift || true
 
 case "$profile" in
-  core)
+  base)
     selected_image=$(image)
-    selected_name=$CONTAINER_NAME
+    selected_name=$BASE_CONTAINER_NAME
     ;;
   tools)
     selected_image=$(tools_image)
-    selected_name=$TOOLS_CONTAINER_NAME
+    selected_name=$CONTAINER_NAME
     ;;
   *)
-    die "unknown profile: $profile (expected core or tools)"
+    die "unknown profile: $profile (expected base or tools)"
     ;;
 esac
 
@@ -54,17 +54,15 @@ cleanup_files=("$runtime_env")
 extra_args=()
 
 if [ "$profile" = tools ]; then
-  # Tool configuration is an explicit opt-in by the tools wrapper. Keep the
-  # legacy GH_TOKEN bridge until the dedicated tools credential store lands,
-  # but do not copy unrelated host/tool settings from .env into the container.
+  ensure_tools_volume "$selected_image"
+  mounts+=(--volume "$TOOLS_HOME_VOLUME:/home/node/.tools")
+
+  # Tool state is deliberately separate from DSH state. These are non-secret
+  # paths; no credential ever enters the long-running container environment.
   {
-    printf 'DOCKER_CONFIG=%s\n' /home/node/.dsh/.docker
-    printf 'GIT_CONFIG_GLOBAL=%s\n' /home/node/.dsh/.gitconfig
-    for name in GH_TOKEN GITHUB_TOKEN GH_ENTERPRISE_TOKEN; do
-      if [ -n "${!name:-}" ]; then
-        printf '%s=%s\n' "$name" "${!name}"
-      fi
-    done
+    printf '%s\n' 'GH_CONFIG_DIR=/home/node/.tools/gh'
+    printf '%s\n' 'GIT_CONFIG_GLOBAL=/home/node/.tools/gitconfig'
+    printf '%s\n' 'DOCKER_CONFIG=/home/node/.tools/docker'
   } >>"$runtime_env"
 
   if [ -n "$DOCKER_SOCKET" ] && [ -S "$DOCKER_SOCKET" ]; then

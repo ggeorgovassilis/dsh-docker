@@ -6,9 +6,9 @@
 source "$(dirname "$0")/lib.sh"
 load_env
 
-core_image=$(image)
+base_image=$(image)
 tools_image=$(tools_image)
-for image_ref in "$core_image" "$tools_image"; do
+for image_ref in "$base_image" "$tools_image"; do
   docker image inspect "$image_ref" >/dev/null 2>&1 || die "image not found: $image_ref (run scripts/build.sh)"
 done
 
@@ -58,13 +58,13 @@ fake_smoke() {
   echo "smoke: ok ($label)"
 }
 
-fake_smoke core "$core_image"
+fake_smoke base "$base_image"
 fake_smoke tools "$tools_image"
 
 [ "${RUN_LIVE_SMOKE:-0}" = 1 ] || { echo "smoke: skipping live model (RUN_LIVE_SMOKE=1 to enable)"; exit 0; }
 
 echo "smoke: live model (costs credits)"
-start "$core_image" --env-file "$runtime_env" \
+start "$base_image" --env-file "$runtime_env" \
   --volume "$WORKSPACE_HOST:$WORKSPACE" --volume "$DSH_HOME_VOLUME:/home/node/.dsh"
 curl -sS -N --max-time 180 "http://127.0.0.1:$port/v1/events" >"$logs" &
 sse=$!

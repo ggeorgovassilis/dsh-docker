@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-# Pure DSH runtime image. Tooling lives in Dockerfile.tools and derives from
+# Base DSH runtime image. Tooling lives in Dockerfile.tools and derives from
 # this image; do not add agent CLI tools or tool credentials here.
 
 # build.sh appends "@sha256:..." when a digest is configured.
@@ -42,7 +42,7 @@ RUN apt-get update \
       tini \
  && rm -rf /var/lib/apt/lists/*
 
-# pnpm is retained in the pure image because `dsh plugin` delegates profile
+# pnpm is retained in the base image because `dsh plugin` delegates profile
 # package management to it. It is not an agent-facing tool dependency.
 RUN npm install --global --ignore-scripts --no-audit --no-fund "pnpm@${PNPM_VERSION}" \
  && pnpm --version >/dev/null
@@ -93,7 +93,7 @@ LABEL org.opencontainers.image.title="DSH API Runtime" \
       org.opencontainers.image.version="${IMAGE_VERSION}" \
       org.opencontainers.image.revision="${IMAGE_REVISION}" \
       io.example.dsh.version="${DSH_VERSION}" \
-      io.example.dsh.variant="core"
+      io.example.dsh.variant="base"
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=20s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:'+(process.env.HTTP_PORT||3080)+'/readyz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"

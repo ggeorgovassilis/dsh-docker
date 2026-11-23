@@ -1,8 +1,8 @@
 # DSH API Runtime — Specification
 
-**Status:** implemented; tool configuration normalisation is tracked separately.
+**Status:** implemented.
 **Target:** the standalone repository `ggeorgovassilis/dsh-docker`.
-**Goal:** a pure DSH container that exposes DeepSeek Harness as an unauthenticated HTTP API (JSON-RPC over HTTP plus SSE events), with Prometheus metrics. A derived tool-enabled image adds optional agent CLI tooling without changing DSH. Both variants are configured from `.env`, operated via `docker exec`, and upgraded with a one-command DSH update flow.
+**Goal:** a base DSH container that exposes DeepSeek Harness as an unauthenticated HTTP API (JSON-RPC over HTTP plus SSE events), with Prometheus metrics. A tool-enabled image derived from the base image is the default runtime and adds agent CLI tooling plus a dedicated tool-state volume without changing DSH. One `.env` file configures both images; credentials live in tool-local state. Both variants are operated via `docker exec` and upgraded with a one-command DSH update flow.
 
 [Acceptance criteria](#acceptance-criteria) is the completion contract.
 
@@ -11,7 +11,7 @@
 | Requirement | Where it is specified |
 |---|---|
 | Everything runs in Docker (build and DSH run) | [Container image](#container-image), [Shell scripts](#shell-scripts) |
-| Configuration through `.env`, operation via `docker exec` | [Configuration](#configuration), [Security](#security) |
+| Configuration through one `.env` file, operation via `docker exec` | [Configuration](#configuration), [Security](#security) |
 | Shell scripts to build, run, stop, smoke-test, and upgrade | [Shell scripts](#shell-scripts) |
 | DSH exposed over HTTP, no authentication | [HTTP API](#http-api), [Security](#security) |
 | Telemetry exposed over HTTP (Prometheus) | [Telemetry](#telemetry) |
@@ -24,10 +24,10 @@
 ### In scope
 
 - Build two container images:
-  - a pure image containing the official `@deepseek-ai/dsh` npm package pinned to an exact version, a small HTTP bridge, and Prometheus metrics over HTTP;
-  - a tool-enabled image derived from the pure image, adding `git`, `gh`, `openssh-client`, Docker CLI/buildx, `ripgrep` and `procps`.
+  - a base image containing the official `@deepseek-ai/dsh` npm package pinned to an exact version, a small HTTP bridge, and Prometheus metrics over HTTP;
+  - a tool-enabled default image derived from the base image, adding `git`, `gh`, `openssh-client`, Docker CLI/buildx, `ripgrep` and `procps`.
 - Run either image with `docker run` or `docker compose`.
-- Configure DSH from one `.env` file; expose tool settings only to the tool-enabled wrapper.
+- Configure both images from one `.env` file; expose tool settings only to the tools wrapper.
 - Build, run, stop, smoke-test, and upgrade both variants with shell scripts.
 - Expose DSH **without authentication**.
 
@@ -58,8 +58,8 @@ The security consequences of "no authentication" are documented once, in [Securi
 | Telemetry | Prometheus `/metrics` on the API port | Pull metrics over HTTP; no OTLP push in v1. |
 | DSH telemetry | disabled by default | Avoid sending product/session telemetry to DeepSeek. |
 | Versioning | exact DSH version pinned in `package.json`; `.env` `IMAGE_TAG` defaults to it | Reproducible builds; one source of truth. |
-| Image split | pure DSH image plus a derived tool-enabled image | DSH stays the baseline; agent CLI tools are an explicit extension. |
-| Wrappers | `run-core.sh` / `run-tools.sh` over shared launch logic | The pure wrapper cannot accidentally inherit tool mounts or tool configuration. |
+| Image split | base DSH image plus a derived tool-enabled default image | DSH stays the baseline; agent CLI tools are an explicit extension. |
+| Wrappers | `run.sh` (tools default) / `run-base.sh` over shared launch logic | Tools are the normal entry point; the base wrapper cannot accidentally inherit tool mounts or configuration. |
 | Auth | none, by requirement | Default bind is `127.0.0.1`; wide bind requires an explicit opt-in flag. |
 
 ### Important correction about "HTTP API"
@@ -91,8 +91,8 @@ The launch boundary has two profiles:
 
 | Profile | Wrapper | Image | Extra facilities |
 |---|---|---|---|
-| `core` | `scripts/run-core.sh` (and the `scripts/run.sh` alias) | `dsh-api-runtime:<version>` | None beyond DSH runtime dependencies. |
-| `tools` | `scripts/run-tools.sh` | `dsh-api-runtime-tools:<version>` | Agent CLI tools and, when available, the host Docker socket. |
+| `tools` (default) | `scripts/run.sh` | `dsh-api-runtime-tools:<version>` | Agent CLI tools, a dedicated tool-state volume and, when available, the host Docker socket. |
+| `base` | `scripts/run-base.sh` | `dsh-api-runtime:<version>` | None beyond DSH runtime dependencies. |
 
 Both wrappers share `scripts/run-container.sh`; tool-specific mounts and environment are added only in the `tools` branch.
 
@@ -102,9 +102,9 @@ Both wrappers share `scripts/run-container.sh`; tool-specific mounts and environ
 
 ```text
 dsh-api-runtime/
-├── .env.example
+├── .env.example            # one file for base + tools settings
 ├── .gitignore
-├── Dockerfile              # pure DSH runtime
+├── Dockerfile              # base DSH runtime
 ├── Dockerfile.tools        # derived tool-enabled image
 ├── package.json
 ├── package-lock.json
@@ -117,11 +117,11 @@ dsh-api-runtime/
 │   └── config.mjs        # env parsing/validation
 ├── scripts/
 │   ├── lib.sh            # shared helpers, image names, filtered runtime env
-│   ├── build.sh          # builds pure image, then tools image
+│   ├── build.sh          # builds base image, then tools image
 │   ├── run-container.sh  # shared launch logic for both profiles
-│   ├── run-core.sh       # pure profile wrapper
-│   ├── run-tools.sh      # tool-enabled profile wrapper
-│   ├── run.sh            # backwards-compatible alias for run-core.sh
+│   ├── run.sh            # default tools profile wrapper
+│   ├── run-base.sh       # non-tools base profile wrapper
+│   ├── gh-auth.sh        # tool-local GitHub credential helper
 │   ├── stop.sh           # core | tools | all
 │   ├── smoke.sh
 │   ├── verify.sh
@@ -150,10 +150,12 @@ Host requirements: Linux (preferred), Bash 4+, Docker Engine 24+, Docker Buildx,
 - Duplicate keys are rejected.
 - Keys must match `^[A-Z][A-Z0-9_]*$`.
 - `.env` is git-ignored. `.env.example` is committed.
-- `ENG_FILE=/path/to/file` overrides the default path (CI use).
+- One `.env` file contains settings for both the base and tools images.
+- The file contains no credentials. GitHub credentials are stored in the tools volume through `scripts/gh-auth.sh`.
+- Both wrappers load the same `.env`; only the tools wrapper mounts the tool volume and adds tool configuration paths.
 - `scripts/lib.sh` refuses to proceed if `.env` is group/world-readable, unless `ALLOW_INSECURE_ENG=1` is set.
 
-`package.json` is the single source of truth for the DSH version. `.env` does **not** carry a separate DSH version; `IMAGE_TAG` is the only tag knob and defaults to the pinned DSH version.
+`package.json` is the single source of truth for the DSH version. Neither configuration file carries a separate DSH version; `IMAGE_TAG` is the only tag knob and defaults to the pinned DSH version.
 
 ### `.env.example`
 
@@ -169,7 +171,7 @@ IMAGE_REPOSITORY=dsh-api-runtime
 TOOLS_IMAGE_REPOSITORY=dsh-api-runtime-tools
 IMAGE_TAG=
 CONTAINER_NAME=dsh
-TOOLS_CONTAINER_NAME=dsh-tools
+BASE_CONTAINER_NAME=dsh-base
 
 # Workspace
 DSH_HOME_VOLUME=dsh-api-home
@@ -178,9 +180,9 @@ WORKSPACE=/workspace
 DSH_CWD=/workspace
 PROJECTS_PATH=
 
-# Tool-enabled profile only
+# Tools profile
+TOOLS_HOME_VOLUME=dsh-tools-home
 DOCKER_SOCKET=/var/run/docker.sock
-# GH_TOKEN=github_pat_replace-me
 
 # Provider/model
 DSH_PROVIDER=deepseek-official
@@ -196,11 +198,10 @@ LOG_LEVEL=info
 DSH_TELEMETRY_MODE=DISABLED
 ```
 
-`.env` is shared by both wrappers for DSH settings, but only the tools wrapper
-currently passes the legacy tool-specific values. The pure wrapper's filtered
-runtime file excludes `GH_TOKEN`, `DOCKER_SOCKET`, `DOCKER_CONFIG` and
-`GIT_CONFIG_GLOBAL`.
-
+The wrappers generate a filtered runtime file. The base profile excludes
+`GH_TOKEN`, `GITHUB_TOKEN`, `DOCKER_SOCKET`, `DOCKER_CONFIG`,
+`GIT_CONFIG_GLOBAL` and `GH_CONFIG_DIR`. The tools profile adds only the
+non-secret tool paths and mounts the tools volume.
 
 ### Required validation
 
@@ -216,7 +217,7 @@ runtime file excludes `GH_TOKEN`, `DOCKER_SOCKET`, `DOCKER_CONFIG` and
 
 ### Runtime environment
 
-The pure wrapper must not pass the whole `.env` file to Docker. `runtime_env_file` generates a temporary environment file containing only DSH/runtime values:
+The wrappers must not pass the whole `.env` file to Docker. `runtime_env_file` generates a temporary environment file containing only DSH/runtime values:
 
 - `DEEPSEEK_API_KEY` and provider credentials matching `*_API_KEY`;
 - provider endpoints matching `*_BASE_URL`;
@@ -226,17 +227,23 @@ The pure wrapper must not pass the whole `.env` file to Docker. `runtime_env_fil
 - `WORKSPACE`;
 - proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `ALL_PROXY`).
 
-The temporary file is deleted on exit. It must exclude tool-specific values such as `GH_TOKEN`, `GITHUB_TOKEN`, `DOCKER_SOCKET`, `DOCKER_CONFIG` and `GIT_CONFIG_GLOBAL`.
+The temporary file is deleted on exit. It must exclude tool-specific values such as `GH_TOKEN`, `GITHUB_TOKEN`, `DOCKER_SOCKET`, `DOCKER_CONFIG`, `GIT_CONFIG_GLOBAL` and `GH_CONFIG_DIR`.
 
-The tools wrapper currently retains the legacy behaviour of passing `.env` and adds the tool configuration paths it needs. Moving tool configuration and credentials to a dedicated tools volume is a follow-up; DSH itself must not gain tool-specific authentication code.
+For the tools profile, the wrapper appends only these non-secret paths to the same temporary file:
+
+- `GH_CONFIG_DIR=/home/node/.tools/gh`
+- `GIT_CONFIG_GLOBAL=/home/node/.tools/gitconfig`
+- `DOCKER_CONFIG=/home/node/.tools/docker`
+
+No credential-shaped variable is added to a long-running container environment. GitHub authentication is persisted as a file in the tools volume by `scripts/gh-auth.sh`.
 
 ---
 
 ## Container image
 
-### Pure image: `Dockerfile`
+### Base image: `Dockerfile`
 
-The pure image contains only DSH runtime dependencies:
+The base image contains only DSH runtime dependencies:
 
 - multi-stage `deps` build, with native packages rebuilt by explicit allowlist;
 - `node_modules`, `package.json` and the bridge copied into the runtime stage;
@@ -245,15 +252,15 @@ The pure image contains only DSH runtime dependencies:
 - no `git`, `gh`, `openssh-client`, Docker CLI/buildx, `ripgrep` or `procps`;
 - no `DOCKER_CONFIG` or `GIT_CONFIG_GLOBAL`.
 
-The image label `io.example.dsh.variant` is `core`.
+The image label `io.example.dsh.variant` is `base`.
 
 ### Tool image: `Dockerfile.tools`
 
 The tool image is derived, not a separate DSH build:
 
 ```dockerfile
-ARG CORE_IMAGE
-FROM ${CORE_IMAGE}
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
 USER root
 RUN apt-get update \
  && apt-get install --yes --no-install-recommends \
@@ -262,14 +269,14 @@ RUN apt-get update \
 USER node
 ```
 
-The image label `io.example.dsh.variant` is `tools`. The bridge, DSH version and entrypoint are inherited unchanged. Tool state is currently placed in the DSH home volume by the wrapper; it must not cause DSH code to acquire tool-specific behaviour.
+The image label `io.example.dsh.variant` is `tools`. The bridge, DSH version and entrypoint are inherited unchanged. The image creates `/home/node/.tools`, owned by UID 1000. The tools wrapper (the default `scripts/run.sh`) mounts the dedicated `TOOLS_HOME_VOLUME` there and sets the tool config paths; tool state never belongs in `$DSH_HOME` and DSH code acquires no tool-specific behaviour.
 
 ### Build order
 
 `scripts/build.sh`:
 
-1. builds the pure image and tags it `${IMAGE_REPOSITORY}:${IMAGE_TAG}`;
-2. builds `Dockerfile.tools` with `CORE_IMAGE` set to that exact image reference and tags it `${TOOLS_IMAGE_REPOSITORY}:${IMAGE_TAG}`;
+1. builds the base image and tags it `${IMAGE_REPOSITORY}:${IMAGE_TAG}`;
+2. builds `Dockerfile.tools` with `BASE_IMAGE` set to that exact image reference and tags it `${TOOLS_IMAGE_REPOSITORY}:${IMAGE_TAG}`;
 3. verifies that both images run the pinned DSH version.
 
 ### Build reproducibility
@@ -294,13 +301,21 @@ Both wrappers use these flags:
 --stop-timeout 30
 ```
 
-The pure profile mounts only:
+The base profile mounts only:
 
 - `${DSH_HOME_VOLUME}:/home/node/.dsh`
 - `${WORKSPACE_HOST}:${WORKSPACE}`
 - `${PROJECTS_PATH}:${PROJECTS_PATH}` when configured
 
-The tools profile additionally mounts `${DOCKER_SOCKET}:/var/run/docker.sock` when the socket exists, and adds the socket's group with `--group-add`. Mounting the Docker socket gives the container control of the host daemon, equivalent to root on the host. The pure image does not contain the Docker CLI and never receives the socket.
+The tools profile additionally mounts:
+
+- `${TOOLS_HOME_VOLUME}:/home/node/.tools`
+- `${DOCKER_SOCKET}:/var/run/docker.sock` when the socket exists, adding its
+  group with `--group-add`
+
+Mounting the Docker socket gives the container control of the host daemon,
+equivalent to root on the host. The base image does not contain the Docker CLI
+and never receives the socket or the tools volume.
 
 ---
 
@@ -577,20 +592,21 @@ The scripts are thin wrappers over Docker; behaviour is specified here rather th
 
 ### `scripts/lib.sh`
 
-- `load_env` — load and validate `.env`.
+- `load_env` — load and validate the single `.env` file shared by both profiles.
 - `die`, `warn`.
 - `dsh_version` — read the pinned DSH version from `package.json`.
-- `image` — core image reference.
+- `image` — base image reference.
 - `tools_image` — derived tools image reference.
 - `runtime_env_file` — generate the filtered DSH-only environment file and return its path.
-- Container-name defaults: `CONTAINER_NAME=dsh`, `TOOLS_CONTAINER_NAME=dsh-tools`.
+- `ensure_tools_volume` — create the tools volume and ensure it is writable by UID 1000.
+- Defaults: `CONTAINER_NAME=dsh` (tools), `BASE_CONTAINER_NAME=dsh-base`, `TOOLS_HOME_VOLUME=dsh-tools-home`, `DOCKER_SOCKET=/var/run/docker.sock`.
 
 ### `scripts/build.sh`
 
 - Load and validate `.env`.
 - Read the pinned DSH version from `package.json` and pass it as the `DSH_VERSION` build arg.
-- Build the pure image with BuildKit, passing `IMAGE_VERSION` and `IMAGE_REVISION`.
-- Build the tools image with `CORE_IMAGE` set to the exact pure image reference.
+- Build the base image with BuildKit, passing `IMAGE_VERSION` and `IMAGE_REVISION`.
+- Build the tools image with `BASE_IMAGE` set to the exact base image reference.
 - Tag `${IMAGE_REPOSITORY}:${IMAGE_TAG}` and `${TOOLS_IMAGE_REPOSITORY}:${IMAGE_TAG}`.
 - Default `IMAGE_TAG` to the pinned DSH version when empty.
 - Verify both images with `docker run --rm --entrypoint /app/node_modules/.bin/dsh <image> --version`.
@@ -608,27 +624,45 @@ Shared launcher selected by the two public wrappers.
 - `-d`: detached with `--restart unless-stopped` and without `--rm`.
 - Apply the security flags from [Runtime security](#runtime-security) and the memory/CPU limits.
 - Map host `HTTP_PORT` to container port `3080` and host `WEB_PORT` to container port `8080`.
-- Pure profile: pass the filtered runtime env file and only DSH/workspace mounts.
-- Tools profile: additionally mount the Docker socket when present, add its group, and set `DOCKER_CONFIG` and `GIT_CONFIG_GLOBAL`.
+- Base profile: pass the filtered runtime env file and only DSH/workspace mounts.
+- Tools profile: ensure and mount `${TOOLS_HOME_VOLUME}:/home/node/.tools`; append
+  `GH_CONFIG_DIR`, `GIT_CONFIG_GLOBAL` and `DOCKER_CONFIG`; mount the Docker
+  socket when present and add its group.
+- Never inject `GH_TOKEN`, `GITHUB_TOKEN` or another tool credential into the
+  container environment.
 - Print the API and web UI URLs, the selected profile, and the container name.
 
-### `scripts/run-core.sh` and `scripts/run-tools.sh`
+### `scripts/run.sh` and `scripts/run-base.sh`
 
-Thin wrappers that call `run-container.sh` with `core` or `tools`. `scripts/run.sh` remains an alias for the pure wrapper.
+`scripts/run.sh` is the default wrapper and selects the tools profile. `scripts/run-base.sh` selects the non-tools base profile.
+
+### `scripts/gh-auth.sh`
+
+Tool-local GitHub credential helper:
+
+- Reads the token from the terminal or, with `--stdin`, from standard input.
+- Never places the token in a command-line argument or container environment variable.
+- Ensures the tools image and tools volume exist.
+- Runs `gh auth login --with-token` in a one-shot tools container with
+  `GH_CONFIG_DIR` and `GIT_CONFIG_GLOBAL` pointing into `/home/node/.tools`.
+- Runs `gh auth setup-git` so Git uses the gh credential helper.
+- Verifies the resulting login from the same environment a model shell sees.
+- Re-running the helper rotates the credential in place; the running tools
+  container does not need to be recreated.
 
 ### `scripts/stop.sh`
 
-- `scripts/stop.sh` or `scripts/stop.sh core` removes the pure container.
-- `scripts/stop.sh tools` removes the tools container.
+- `scripts/stop.sh` or `scripts/stop.sh tools` removes the default tools container.
+- `scripts/stop.sh base` removes the base container.
 - `scripts/stop.sh all` removes both.
-- Never delete volumes.
+- Never delete the DSH home or tools volume.
 
 ### `scripts/smoke.sh`
 
 Two layers:
 
 1. **Fake-DSH integration test (always runs in CI).**
-   - Run once against the pure image and once against the tools image.
+   - Run once against the base image and once against the tools image.
    - Mount the fixture read-only and point the bridge at it with `-v "$PWD/test:/test:ro" -e DSH_BIN=/test/fake-dsh.mjs`.
    - Assert `/readyz`, `session/prompt`, SSE notifications and `/metrics`.
 2. **Live smoke (opt-in, costs model credits).**
@@ -661,10 +695,14 @@ Steps:
 Assert:
 
 - `package.json`'s pinned DSH version equals both images' `dsh --version` and image labels.
-- The pure image has variant label `core` and no `gh`, `git`, `docker`, `rg` or `ps`.
+- The base image has variant label `base` and no `gh`, `git`, `docker`, `rg` or `ps`.
 - The tools image has variant label `tools` and contains those tools.
-- `pnpm` remains available in the pure image.
-- The filtered pure runtime environment excludes tool variables such as `GH_TOKEN`, `DOCKER_SOCKET` and `GIT_CONFIG_GLOBAL`.
+- `pnpm` remains available in the base image.
+- The tools image provides a writable `/home/node/.tools` directory.
+- The filtered base runtime environment excludes tool variables such as `GH_TOKEN`, `DOCKER_SOCKET`, `GH_CONFIG_DIR`, `DOCKER_CONFIG` and `GIT_CONFIG_GLOBAL`.
+- The tools wrapper sets `GH_CONFIG_DIR`, `GIT_CONFIG_GLOBAL` and `DOCKER_CONFIG` to paths under `/home/node/.tools`.
+- The long-running tools wrapper does not inject `GH_TOKEN`.
+- `.env.example` has no credentials and includes settings for both images.
 - Both wrappers use the read-only/capability-drop security flags.
 - No `latest` tag is produced.
 
@@ -707,8 +745,9 @@ Mitigations:
 
 ### Docker socket
 
-Only `scripts/run-tools.sh` mounts the host Docker socket. This makes the
-tools container's isolation conditional:
+Only the tools wrapper (`scripts/run.sh`) mounts the host Docker socket, configured through
+`DOCKER_SOCKET` in `.env`. This makes the tools container's isolation
+conditional:
 
 - The socket grants control of the host Docker daemon, which is equivalent to
   root on the host (a client can start a privileged container and mount any
@@ -716,22 +755,27 @@ tools container's isolation conditional:
 - Anyone who can send requests to DSH can therefore reach the host through
   Docker.
 - Do not expose the API to untrusted networks while the socket is mounted.
-- Use the pure profile when Docker access is not needed; it neither installs
-  the Docker CLI nor mounts the socket.
+- Use `scripts/run-base.sh` when Docker access is not needed; it neither installs
+  the Docker CLI nor mounts the socket or tools volume.
 
 ### Secrets
 
-- `.env` contains model credentials and, optionally for the tools profile,
-  `GH_TOKEN`. Mode `0600`, git-ignored, never baked into the image.
-- The pure wrapper passes only the filtered DSH runtime environment, so
-  `GH_TOKEN` and tool-specific variables never enter the pure container.
-- The tools wrapper currently passes the legacy tool environment. Moving tool
-  credentials to a dedicated tools volume and removing `GH_TOKEN` from
-  `.env` is a follow-up.
+- `.env` contains model credentials only. Mode `0600`, git-ignored, never
+  baked into the image.
+- GitHub credentials live in `${TOOLS_HOME_VOLUME}:/home/node/.tools/gh/hosts.yml`
+  and are created by `scripts/gh-auth.sh`. They are not present in either
+  configuration file or in the long-running container environment.
+- The base wrapper passes only the filtered DSH runtime environment, so no tool
+  configuration or credential enters the base container.
+- The tools wrapper additionally passes only non-secret tool paths and mounts
+  the tools volume.
 - `docker inspect` exposes environment variables to anyone with Docker access;
   restrict Docker access.
 - Never log credentials or request headers.
-- Rotate keys if `.env` is leaked.
+- Rotate credentials by re-running `scripts/gh-auth.sh`.
+- To migrate from the old `GH_TOKEN` workflow, run `scripts/gh-auth.sh`, remove
+  `GH_TOKEN` from `.env`, then optionally remove the old tool files from the
+  DSH home volume after verifying the tool-local login.
 
 ### Supply chain
 
@@ -761,8 +805,8 @@ On pull request:
 
 - `npm ci` / lockfile check.
 - Unit + fake-DSH integration tests.
-- `scripts/build.sh` builds the pure and tools images.
-- `scripts/verify.sh` checks both image variants and the pure/tools binary split.
+- `scripts/build.sh` builds the base and tools images.
+- `scripts/verify.sh` checks both image variants and the base/tools binary split.
 - `scripts/smoke.sh` runs the fake-DSH test against both variants.
 - Trivy/Grype scans both images.
 - Verify non-root/read-only flags in the shared run script.
@@ -787,23 +831,37 @@ On tag/release:
 
 ## Acceptance criteria
 
-The two-image split is done when all of the following are true:
+The base/tools split and tool-state normalisation are done when all of the
+following are true:
 
-- [ ] `scripts/build.sh` builds the pure image and a tools image derived from its exact tag.
+- [ ] `scripts/build.sh` builds the base image and a tools image derived from its exact tag.
 - [ ] Both images run the pinned DSH version and report it in their image labels.
-- [ ] The pure image does not contain `gh`, `git`, Docker CLI/buildx, `ripgrep` or `procps`.
+- [ ] The base image has variant label `base`.
+- [ ] The tools image has variant label `tools`.
+- [ ] The base image does not contain `gh`, `git`, Docker CLI/buildx, `ripgrep` or `procps`.
 - [ ] The tools image contains those tools.
-- [ ] `scripts/run-core.sh` exists and does not mount the tools volume or Docker socket, and does not pass tool-specific environment variables.
-- [ ] `scripts/run-tools.sh` exists and is the only public wrapper that selects the tools image and adds tool mounts/configuration.
+- [ ] `scripts/run.sh` exists and runs the tools image by default.
+- [ ] `scripts/run-base.sh` exists and runs the non-tools base image.
+- [ ] Both wrappers are backed by shared launch logic.
 - [ ] Both wrappers support foreground, detached, stop and recreate flows.
-- [ ] `scripts/run.sh` remains a backwards-compatible alias for the pure wrapper.
-- [ ] The pure wrapper's filtered runtime environment excludes `GH_TOKEN`, `GITHUB_TOKEN`, `DOCKER_SOCKET`, `DOCKER_CONFIG` and `GIT_CONFIG_GLOBAL`.
-- [ ] The tools wrapper continues to support the Docker socket when available.
-- [ ] `scripts/verify.sh` checks the pure/tools binary split and the filtered environment.
+- [ ] One `.env` file configures both images, including tool settings.
+- [ ] There is no separate `.env.tools` or `.env.tools.example`.
+- [ ] `.env` and `.env.example` contain no `GH_TOKEN` and no tool credentials.
+- [ ] The tools wrapper mounts the dedicated `${TOOLS_HOME_VOLUME}:/home/node/.tools` volume and sets `GH_CONFIG_DIR`, `GIT_CONFIG_GLOBAL` and `DOCKER_CONFIG`.
+- [ ] The base wrapper does not mount the tools volume or set tool configuration variables.
+- [ ] The tools volume is writable by UID 1000.
+- [ ] `scripts/gh-auth.sh` reads the token from stdin or a hidden prompt and never places it in argv or a container environment variable.
+- [ ] `gh auth` and `gh auth setup-git` persist only into the tools volume.
+- [ ] `gh` and `git` work in a model shell with `GH_TOKEN` explicitly absent.
+- [ ] Re-running `scripts/gh-auth.sh` rotates the token without recreating the container.
+- [ ] No tool authentication code or startup hooks are added to DSH's bridge or supervisor.
+- [ ] No tool configuration or credentials are written under `$DSH_HOME`.
+- [ ] The base wrapper's filtered runtime environment excludes `GH_TOKEN`, `GITHUB_TOKEN`, `DOCKER_SOCKET`, `DOCKER_CONFIG`, `GIT_CONFIG_GLOBAL` and `GH_CONFIG_DIR`.
+- [ ] `scripts/verify.sh` checks the base/tools binary split, default wrapper, tool volume, path configuration and filtered environment.
 - [ ] `scripts/smoke.sh` runs the fake-DSH test against both image variants.
 - [ ] CI builds, verifies and scans both images.
-- [ ] `docs/dsh-api-runtime-implementation.md` describes the two-image architecture, wrappers, build order, credential/tool boundary and test requirements.
-- [ ] `README.md` describes image selection, both wrappers, tool availability, Docker access and security implications.
+- [ ] `docs/dsh-api-runtime-implementation.md` describes the default tools profile, base profile, one-file configuration, tool-local state and credential persistence.
+- [ ] `README.md` describes default tools usage, base usage, one-file configuration, tool authentication, rotation, migration and security implications.
 
 ---
 
@@ -818,15 +876,19 @@ Resolved during implementation:
 2. Provider/model identifiers are `DSH_PROVIDER=deepseek-official` and
    `DSH_MODEL=deepseek-v4-flash`; the credential env var is
    `DEEPSEEK_API_KEY`.
-3. The pure image is the default runtime; tooling is an explicit derived image.
-4. `scripts/run-core.sh` / `scripts/run-tools.sh` are the public wrappers;
-   `scripts/run.sh` remains an alias for the pure wrapper.
+3. The tool-enabled image is the default runtime. The base image is the
+   explicit non-tools setup.
+4. `scripts/run.sh` selects the tools profile; `scripts/run-base.sh` selects
+   the base profile.
+5. Tool configuration and credentials live in a dedicated tools volume. The
+   tools wrapper sets only non-secret paths; `scripts/gh-auth.sh` stores
+   GitHub credentials without adding them to the DSH environment.
+6. One `.env` file configures both profiles and includes the non-secret tool
+   settings. There are no separate tool environment files.
 
 Still open:
 
-5. Do clients need server-to-client approvals or user questions?
-6. Is POST + SSE acceptable, or must browser clients use WebSocket?
-7. Should the workspace be a host bind mount or a named volume?
-8. Which network/CIDR may reach the unauthenticated API, and who owns the reverse proxy or network policy?
-9. When should tool configuration and GitHub credentials move from the legacy
-   DSH-home paths to a dedicated tools volume?
+7. Do clients need server-to-client approvals or user questions?
+8. Is POST + SSE acceptable, or must browser clients use WebSocket?
+9. Should the workspace be a host bind mount or a named volume?
+10. Which network/CIDR may reach the unauthenticated API, and who owns the reverse proxy or network policy?

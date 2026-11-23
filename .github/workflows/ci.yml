@@ -55,13 +55,13 @@ jobs:
         run: |
           source scripts/lib.sh
           load_env
-          echo "core=$(image)" >> "$GITHUB_OUTPUT"
+          echo "base=$(image)" >> "$GITHUB_OUTPUT"
           echo "tools=$(tools_image)" >> "$GITHUB_OUTPUT"
 
-      - name: Trivy core image scan
+      - name: Trivy base image scan
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: ${{ steps.image.outputs.core }}
+          image-ref: ${{ steps.image.outputs.base }}
           # Pin Trivy too: the action's default version pointed at a release
           # that no longer exists, so its install step failed the job.
           version: v0.76.2

@@ -1,10 +1,10 @@
 # syntax=docker/dockerfile:1.7
 
-# Tool-enabled extension of the pure DSH runtime. This image is selected only
-# by scripts/run-tools.sh. Tool-specific configuration and credential storage
-# are intentionally kept out of the pure image and the DSH bridge.
-ARG CORE_IMAGE
-FROM ${CORE_IMAGE}
+# Tool-enabled extension of the base DSH runtime. This image is selected only
+# by scripts/run.sh. Tool-specific configuration and credential storage
+# are intentionally kept out of the base image and the DSH bridge.
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
 
 USER root
 
@@ -19,14 +19,12 @@ RUN apt-get update \
       procps \
  && rm -rf /var/lib/apt/lists/*
 
-# Tool state lives in the DSH home volume for now. Issue #2 will move it to a
-# dedicated tools volume and remove credential-shaped variables from DSH's
-# runtime environment.
-ENV DOCKER_CONFIG=/home/node/.dsh/.docker \
-    GIT_CONFIG_GLOBAL=/home/node/.dsh/.gitconfig
-
-RUN mkdir -p /home/node/.dsh/.docker \
- && chown -R node:node /home/node/.dsh
+# Tool state and credentials live in a dedicated tools volume mounted by the
+# tools wrapper at /home/node/.tools. This image deliberately does not define
+# GH_CONFIG_DIR, GIT_CONFIG_GLOBAL or DOCKER_CONFIG; the wrapper sets those
+# non-secret paths explicitly.
+RUN mkdir -p /home/node/.tools \
+ && chown node:node /home/node/.tools
 
 USER node
 WORKDIR /workspace

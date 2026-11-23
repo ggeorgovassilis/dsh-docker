@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Stop and remove a runtime container. Volumes are kept.
 #
-# Usage: scripts/stop.sh [core|tools|all|<container-name>]
-# Default: core.
+# Usage: scripts/stop.sh [tools|base|all|<container-name>]
+# Default: tools.
 
 set -Eeuo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -14,14 +14,14 @@ if [ -f .env ]; then
   set +a
 fi
 : "${CONTAINER_NAME:=dsh}"
-: "${TOOLS_CONTAINER_NAME:=dsh-tools}"
+: "${BASE_CONTAINER_NAME:=dsh-base}"
 
-case "${1:-core}" in
-  core) names=("$CONTAINER_NAME") ;;
-  tools) names=("$TOOLS_CONTAINER_NAME") ;;
-  all) names=("$CONTAINER_NAME" "$TOOLS_CONTAINER_NAME") ;;
+case "${1:-tools}" in
+  tools) names=("$CONTAINER_NAME") ;;
+  base) names=("$BASE_CONTAINER_NAME") ;;
+  all) names=("$CONTAINER_NAME" "$BASE_CONTAINER_NAME") ;;
   -h | --help)
-    echo "usage: $0 [core|tools|all|<container-name>]"
+    echo "usage: $0 [tools|base|all|<container-name>]"
     exit 0
     ;;
   *) names=("$1") ;;
